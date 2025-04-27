@@ -1,0 +1,83 @@
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  quality-security-analysis:
+    runs-on: windows-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0  # Ensure full history for proper diff
+
+      - name: Gather Full Code From Changed Files
+        run: |
+          CHANGED_FILES=$(git diff --name-only origin/main...HEAD)
+          echo '{"original files": [' > original_files_temp.json
+          for file in $CHANGED_FILES; do
+            if [[ $file == *.json ]] || [[ $file == *.png ]]; then
+              continue
+            fi
+            if [ -f "$file" ]; then
+              CONTENT=$(jq -Rs . < "$file")
+              echo "{\"filename\": \"$file\", \"content\": $CONTENT}," >> original_files_temp.json
+            fi
+          done
+          sed -i '$ s/,$//' original_files_temp.json
+          echo "]}" >> original_files_temp.json
+
+      - name: Display Processed Diff (Debug)
+        run: cat original_files_temp.json
+
+      - name: Get Diff
+        run: |
+          git diff origin/main...HEAD \
+            | grep '^[+-]' \
+            | grep -Ev '^(---|\+\+\+)' > code_changes_only.txt
+          jq -Rs '{diff: .}' code_changes_only.txt > diff.json
+          if [ -f original_files_temp.json ]; then
+            jq -s '.[0] * .[1]' diff.json original_files_temp.json > combined.json
+            mv combined.json diff.json
+
+      - name: Analyze with OpenAI
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          DIFF_CONTENT=$(jq -r '.diff' diff.json)
+          ORIGINAL_FILES=$(jq -r '."original files"' diff.json)
+          PROMPT="Please review the following code changes for the following aspects: Code Style & Formatting, Error Handling & Logging, Performance, and Bug Fixes. Provide a brief report in markdown format:\n\nDIFF:\n${DIFF_CONTENT}\n\nORIGINAL FILES:\n${ORIGINAL_FILES}"
+          jq -n --arg prompt "$PROMPT" '{
+            "model": "gpt-4",
+            "messages": [
+              { "role": "system", "content": "You are a code reviewer." },
+              { "role": "user", "content": $prompt }
+            ]
+          }' > request.json
+          curl -sS https://api.openai.com/v1/chat/completions \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${OPENAI_API_KEY}" \
+            -d @request.json > response.json
+
+      - name: Extract Review Message
+        id: extract_message
+        run: |
+          ASSISTANT_MSG=$(jq -r '.choices[0].message.content' response.json)
+          {
+            echo "message<<EOF"
+            echo "$ASSISTANT_MSG"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Post Comment to PR
+        env:
+          COMMENT: ${{ steps.extract_message.outputs.message }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments \
+            -f body="$COMMENT"
