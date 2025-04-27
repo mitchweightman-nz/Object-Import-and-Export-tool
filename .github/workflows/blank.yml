@@ -17,17 +17,27 @@ jobs:
 
       - name: Gather Full Code From Changed Files
         run: |
+          # Get the list of changed files between main and the PR
           CHANGED_FILES=$(git diff --name-only origin/main...HEAD)
+          
+          # Initialize the JSON file content
           echo '{"original files": [' > original_files_temp.json
+
+          # Loop through each changed file
           for file in $CHANGED_FILES; do
+            # Skip .json and .png files
             if [[ $file == *.json ]] || [[ $file == *.png ]]; then
               continue
             fi
+            # Check if the file exists
             if [ -f "$file" ]; then
+              # Read the file content and add it to the JSON array
               CONTENT=$(jq -Rs . < "$file")
               echo "{\"filename\": \"$file\", \"content\": $CONTENT}," >> original_files_temp.json
             fi
           done
+
+          # Remove trailing comma and close the JSON array
           sed -i '$ s/,$//' original_files_temp.json
           echo "]}" >> original_files_temp.json
 
@@ -36,13 +46,21 @@ jobs:
 
       - name: Get Diff
         run: |
+          # Get the changes made between the base (origin/main) and the current PR HEAD
           git diff origin/main...HEAD \
             | grep '^[+-]' \
             | grep -Ev '^(---|\+\+\+)' > code_changes_only.txt
+
+          # Create a JSON file with the diff content
           jq -Rs '{diff: .}' code_changes_only.txt > diff.json
+          
+          # Combine diff and original files into one JSON if the temp file exists
           if [ -f original_files_temp.json ]; then
             jq -s '.[0] * .[1]' diff.json original_files_temp.json > combined.json
             mv combined.json diff.json
+
+      - name: Display Processed Diff (Debug)
+        run: cat diff.json
 
       - name: Analyze with OpenAI
         env:
