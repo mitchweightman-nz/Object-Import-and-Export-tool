@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   quality-security-analysis:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     steps:
       - name: Check out code
         uses: actions/checkout@v3
@@ -17,17 +17,19 @@ jobs:
 
       - name: Gather Full Code From Changed Files
         run: |
-          $CHANGED_FILES = git diff --name-only origin/main...HEAD
-          $originalFiles = @()
-          foreach ($file in $CHANGED_FILES) {
-            if ($file -match '\.json$' -or $file -match '\.png$') {
+          CHANGED_FILES=$(git diff --name-only origin/main...HEAD)
+          echo '{"original files": [' > original_files_temp.json
+          for file in $CHANGED_FILES; do
+            if [[ $file == *.json ]] || [[ $file == *.png ]]; then
               continue
-            }
-            if (Test-Path $file) {
-              $CONTENT = Get-Content $file | Out-String
-              $originalFiles += [PSCustomObject]@{filename = $file; content = $CONTENT}
-            }
-          }
+            fi
+            if [ -f "$file" ]; then
+              CONTENT=$(jq -Rs . < "$file")
+              echo "{\"filename\": \"$file\", \"content\": $CONTENT}," >> original_files_temp.json
+            fi
+          done
+          sed -i '$ s/,$//' original_files_temp.json
+          echo "]}" >> original_files_temp.json
 
       - name: Display Processed Diff (Debug)
         run: cat original_files_temp.json
