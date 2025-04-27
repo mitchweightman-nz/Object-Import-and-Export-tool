@@ -58,6 +58,7 @@ jobs:
           if [ -f original_files_temp.json ]; then
             jq -s '.[0] * .[1]' diff.json original_files_temp.json > combined.json
             mv combined.json diff.json
+          fi
 
       - name: Display Processed Diff (Debug)
         run: cat diff.json
