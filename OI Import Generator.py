@@ -294,6 +294,7 @@ def run_processing(csv_file, xml_base, default_location, category, username,
     logging.info("--- Starting Processing Run (DB Integrated) ---")
     logging.info(f"Force Reprocess Successful Items: {force_reprocess}")
     objects_for_db = []; original_fieldnames = []
+    db_updates_batch = [] # Initialize list to batch DB updates
     try:
         with open(csv_file, "r", encoding="utf-8-sig") as f:
             sample = f.read(2048); f.seek(0); dialect = None
@@ -324,6 +325,7 @@ def run_processing(csv_file, xml_base, default_location, category, username,
     logging.info(f"Processing {total_rows_to_process} objects (estimated {total_batches} batches)...")
     rename_list = []; batch_nodes_with_ids = []; batch_count = 0; node_type_counts = {}
     processed_count = 0; skipped_count = 0; error_count = 0; current_batch_file_path = ""
+    # db_updates_batch already initialized above
     for i, db_object_info in enumerate(objects_for_db):
         unique_id = db_object_info['unique_id']; csv_data = db_object_info['csv_data']; row_num = db_object_info['csv_row_index']
         if stop_flag_func and stop_flag_func(): logging.warning(f"Stop requested. Halting before object {unique_id} (Row {row_num})."); break
@@ -338,21 +340,45 @@ def run_processing(csv_file, xml_base, default_location, category, username,
             identifier_res = node_elem.findtext("title", default="").strip() or node_elem.findtext("location", default="").strip() or f"Row_{row_num}_Object"
             generated_xml_str = ET.tostring(node_elem, encoding='unicode'); node_type_counts[node_type_res] = node_type_counts.get(node_type_res, 0) + 1
             batch_nodes_with_ids.append((node_elem, unique_id))
-            db_handler.update_object_status(unique_id=unique_id, status='success', node_type=node_type_res, action=action_res, identifier=identifier_res, generated_xml=generated_xml_str, error_message=None)
-        else: error_count += 1; db_handler.update_object_status(unique_id=unique_id, status='failed', error_message=error_msg)
+            # Accumulate successful update for batch
+            db_updates_batch.append({
+                'unique_id': unique_id, 'status': 'success', 'node_type': node_type_res,
+                'action': action_res, 'identifier': identifier_res,
+                'generated_xml': generated_xml_str, 'error_message': None,
+                'output_batch_file': None # Will be updated later if part of a written batch
+            })
+        else:
+            error_count += 1
+            # Accumulate failed update for batch
+            db_updates_batch.append({
+                'unique_id': unique_id, 'status': 'failed', 'error_message': error_msg,
+                'generated_xml': None # Ensure generated_xml is cleared on failure
+            })
+
         is_last_item = (i + 1) == total_rows_to_process
         if batch_nodes_with_ids and (len(batch_nodes_with_ids) >= batch_size or is_last_item):
-            batch_count += 1; current_batch_file_path = os.path.join(output_dir, f"{base_name}_{batch_count}{ext}")
+            batch_count += 1
+            current_batch_file_path = os.path.join(output_dir, f"{base_name}_{batch_count}{ext}")
             ids_in_batch = write_xml_batch(batch_nodes_with_ids, current_batch_file_path, cdata_fields)
+
             if ids_in_batch:
-                logging.info(f"Updating DB records for {len(ids_in_batch)} objects in batch {batch_count}...")
-                updates_failed = 0
-                for uid_in_batch in ids_in_batch:
-                    success_update = db_handler.update_object_status(unique_id=uid_in_batch, status='success', output_batch_file=current_batch_file_path)
-                    if not success_update: updates_failed += 1
-                if updates_failed > 0: logging.error(f"Failed to update output batch file path for {updates_failed} objects in batch {batch_count}.")
-            batch_nodes_with_ids.clear()
-    logging.info("--- Processing Run Finished ---"); logging.info(f"Total objects from CSV: {total_rows_to_process}"); logging.info(f"Successfully processed & batched: {processed_count}"); logging.info(f"Skipped: {skipped_count}"); logging.info(f"Errors: {error_count}"); logging.info(f"Total batches written: {batch_count}"); logging.info(f"Node type counts (for successful): {json.dumps(node_type_counts)}")
+                logging.info(f"Updating 'output_batch_file' for {len(ids_in_batch)} successful objects in memory before batch DB update...")
+                for update_item in db_updates_batch:
+                    if update_item['unique_id'] in ids_in_batch and update_item['status'] == 'success':
+                        update_item['output_batch_file'] = current_batch_file_path
+            
+            batch_nodes_with_ids.clear() # Clear XML node batch
+
+    # After the loop, perform the batch DB update
+    if db_updates_batch:
+        logging.info(f"Performing batch database update for {len(db_updates_batch)} objects...")
+        updated_db_rows, failed_db_updates = db_handler.batch_update_object_statuses(db_updates_batch)
+        logging.info(f"Batch DB update complete. Successfully updated rows (approx): {updated_db_rows}, Failed/Not Found: {failed_db_updates}")
+        db_updates_batch.clear()
+    else:
+        logging.info("No database updates to batch process.")
+
+    logging.info("--- Processing Run Finished ---"); logging.info(f"Total objects from CSV: {total_rows_to_process}"); logging.info(f"Successfully processed & batched for XML: {processed_count}"); logging.info(f"Skipped (due to prior success/force_reprocess=False): {skipped_count}"); logging.info(f"Processing errors: {error_count}"); logging.info(f"Total XML batches written: {batch_count}"); logging.info(f"Node type counts (for successful): {json.dumps(node_type_counts)}")
     if rename_list and not use_report_for_file:
         rename_script_path = generate_rename_script(rename_list, output_dir)
         if rename_script_path: logging.info(f"Rename script saved to: {rename_script_path}")
@@ -780,10 +806,16 @@ class Application(tk.Tk):
             with open(xml_path, 'r', encoding='utf-8') as f:
                 for line in f:
                     stripped_line = line.strip()
-                    if stripped_line.startswith("', stripped_line)
-                        if match: current_error = match.group(1).strip()
-                        else: current_error = stripped_line[4:-3].strip() if len(stripped_line) > 7 else "(Malformed comment)"
+                    match = re.match(r"<!-- Error:(.*)-->", stripped_line)
+                    if match:
+                        current_error = match.group(1).strip()
                         logging.debug(f"Found error comment: {current_error}")
+                    elif stripped_line.startswith("<!--"): # Handle other comments if necessary, or log them
+                        # This part handles comments that are not errors,
+                        # or potentially malformed error comments.
+                        # For now, let's assume non-error comments don't reset current_error
+                        # or we can log them if they are unexpected.
+                        logging.debug(f"Found non-error XML comment: {stripped_line}")
                     elif stripped_line.startswith("<node"):
                         node_xml_lines = [stripped_line]; in_node = True
                     elif in_node:

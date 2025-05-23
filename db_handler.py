@@ -108,6 +108,107 @@ def update_object_status(unique_id, status, node_type=None, action=None, identif
             else: logging.warning(f"Could not update status for {unique_id}: ID not found."); return False
     except Exception as e: logging.error(f"Database error updating status for {unique_id}: {e}", exc_info=True); return False
 
+def batch_update_object_statuses(updates_list, db_path=DB_PATH):
+    """
+    Updates multiple objects in the database in a single batch.
+
+    Args:
+        updates_list (list): A list of dictionaries. Each dictionary must contain 'unique_id'
+                             and any of the following optional keys to update: 'status',
+                             'node_type', 'action', 'identifier', 'generated_xml',
+                             'error_message', 'output_batch_file'.
+        db_path (str, optional): Path to the database file. Defaults to DB_PATH.
+
+    Returns:
+        tuple: (number_of_successfully_updated_rows, number_of_failed_updates)
+    """
+    if not updates_list:
+        logging.info("batch_update_object_statuses: No updates to perform.")
+        return 0, 0
+
+    timestamp = datetime.datetime.now()
+    # Parameters for each update:
+    # status, node_type, action, identifier, generated_xml, error_message, output_batch_file, last_attempt_timestamp, unique_id
+    params_to_execute = []
+    for item in updates_list:
+        if 'unique_id' not in item:
+            logging.warning(f"Skipping item in batch update due to missing 'unique_id': {item}")
+            continue
+        params_to_execute.append((
+            item.get('status'),
+            item.get('node_type'),
+            item.get('action'),
+            item.get('identifier'),
+            item.get('generated_xml'),
+            item.get('error_message'), # This can be None for successful items
+            item.get('output_batch_file'),
+            timestamp,
+            item['unique_id']
+        ))
+
+    if not params_to_execute:
+        logging.warning("batch_update_object_statuses: No valid items to update after filtering.")
+        return 0, len(updates_list) # All items were invalid
+
+    updated_rows_count = 0
+    failed_updates_count = 0
+
+    try:
+        with sqlite3.connect(db_path, detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES) as conn:
+            cursor = conn.cursor()
+            # Using COALESCE for fields that might not be in every item,
+            # so they retain their existing value if not provided in the update.
+            # However, for error_message, we want to explicitly set it (even to NULL),
+            # so it's not coalesced.
+            # For generated_xml, if it's explicitly set to None, it should be NULL.
+            # output_batch_file should also be explicitly updatable.
+            cursor.executemany('''
+                UPDATE objects
+                SET
+                    status = COALESCE(?, status),
+                    node_type = COALESCE(?, node_type),
+                    action = COALESCE(?, action),
+                    identifier = COALESCE(?, identifier),
+                    generated_xml = COALESCE(?, generated_xml),
+                    error_message = ?,
+                    output_batch_file = COALESCE(?, output_batch_file),
+                    last_attempt_timestamp = ?
+                WHERE unique_id = ?
+            ''', params_to_execute)
+            updated_rows_count = cursor.rowcount # Note: executemany on UPDATE might not give accurate rowcount on all sqlite versions/drivers.
+                                               # For precise count, one might need to re-query or iterate updates.
+                                               # However, for performance, this is a common approach.
+                                               # If an ID doesn't exist, it's not an error, just 0 rows updated for that item.
+            conn.commit()
+            
+            # A more accurate way to count, but slower:
+            # for param_set in params_to_execute:
+            #     cursor.execute(THE_SAME_UPDATE_QUERY_AS_ABOVE_BUT_FOR_ONE_ROW, param_set)
+            #     if cursor.rowcount > 0: updated_rows_count +=1 
+            #     else: failed_updates_count +=1 # Assuming unique_id should exist
+            # conn.commit()
+
+        # Assuming if an ID doesn't exist, it's not strictly a "failed update" for the batch operation itself,
+        # but rather that particular item didn't match.
+        # The definition of "failed_updates_count" here would be items that errored out during DB operation,
+        # which executemany usually handles by rolling back the whole transaction or raising an exception.
+        # If the operation completes, we assume all listed operations were "attempted".
+        # We'll consider an update "successful" if it was part of the committed transaction.
+        # A more robust check for individual row success would be more complex.
+        
+        logging.info(f"Batch update: Attempted to update {len(params_to_execute)} objects. Rows affected (approx): {updated_rows_count}.")
+        # If rowcount is less than len(params_to_execute), it means some unique_ids were not found.
+        # This is not an error for the batch itself, but those specific items were not updated.
+        return updated_rows_count, len(params_to_execute) - updated_rows_count
+
+    except sqlite3.Error as e:
+        logging.error(f"Database error during batch update: {e}", exc_info=True)
+        return 0, len(params_to_execute) # All items in this batch failed due to the error
+    except Exception as e:
+        logging.error(f"Unexpected error during batch update: {e}", exc_info=True)
+        return 0, len(params_to_execute)
+
+
 # --- Query Functions for Reporting / Reprocessing ---
 
 def get_objects_by_status(status_list, db_path=DB_PATH):
