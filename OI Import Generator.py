@@ -377,6 +377,7 @@ class Application(tk.Tk):
         style = Style(self)
         try: style.theme_use('clam'); logging.info("Applied 'clam' ttk theme.")
         except tk.TclError: logging.warning("The 'clam' theme is not available, using default ttk theme.")
+        
         self.mapping = {}; self.csv_file = tk.StringVar(); self.xml_base = tk.StringVar()
         self.default_location = tk.StringVar(); self.category = tk.StringVar()
         self.username = tk.StringVar(value=os.getlogin()); self.mapping_file = tk.StringVar()
@@ -391,7 +392,8 @@ class Application(tk.Tk):
         self.current_project_path = None
         self.db_available = False
         self.force_reprocess_var = tk.BooleanVar(value=False)
-        self.mapping_dirty = tk.BooleanVar(value=False) # For CSV Mapping dirty state
+        self.mapping_dirty = tk.BooleanVar(value=False) 
+        
         self.notebook = ttk.Notebook(self)
         self.log_frame = ttk.Frame(self.notebook)
         self.log_text = tk.Text(self.log_frame, height=15, font=("Consolas", 10), wrap=tk.WORD)
@@ -401,18 +403,27 @@ class Application(tk.Tk):
         log_scroll_y.pack(side="right", fill="y"); log_scroll_x.pack(side="bottom", fill="x")
         self.log_text.pack(side="left", fill="both", expand=True, padx=(10,0), pady=10)
         setup_logging(self.log_text)
+        
         self.current_db_path = db_handler.DB_PATH
         logging.info(f"Using database file: {self.current_db_path}")
         if db_handler.init_db(self.current_db_path): self.db_available = True; logging.info("Database connection successful.")
         else: self.db_available = False; logging.error("Database initialization failed."); messagebox.showerror("Database Error", "Could not initialize the SQLite database.")
+        
         logging.info(f"Attempting to load fallback config from: {DEFAULT_CONFIG_FILE}")
         fallback_cfg = load_config_from_path(DEFAULT_CONFIG_FILE)
         if fallback_cfg:
             if "special_char_map" in fallback_cfg: self.special_char_map = fallback_cfg["special_char_map"]
             if "categories" in fallback_cfg: self.categories = fallback_cfg["categories"]
-            self.load_config_values(fallback_cfg)
+            self.load_config_values(fallback_cfg) # Loads data into self.variables
         else: logging.info("No fallback config found or failed to load.")
-        self.create_widgets(); self.refresh_categories_listbox(); self.populate_special_mapping_tab()
+            
+        self.create_widgets() # Creates all UI elements
+        
+        # Populate UI elements that depend on loaded config and created widgets
+        self.refresh_categories_listbox()
+        self.populate_special_mapping_tab()
+        self.populate_csv_mapping_tab() # Explicit call after widgets are created
+        
         self.protocol("WM_DELETE_WINDOW", self.on_closing); logging.info("Application initialized.")
 
     def load_config_values(self, config):
@@ -435,7 +446,7 @@ class Application(tk.Tk):
         if "csv_mapping" in config:
             self.mapping = normalize_mapping(config["csv_mapping"])
             logging.info(f"Loaded {len(self.mapping)} CSV mapping rules from config.")
-            self.populate_csv_mapping_tab() # This will also reset mapping_dirty
+            # Removed self.populate_csv_mapping_tab() from here
 
     def gather_current_config_dict(self):
         logging.debug("Gathering current configuration for saving.")
@@ -532,25 +543,26 @@ class Application(tk.Tk):
 
     def on_mapping_changed(self, *args):
         self.mapping_dirty.set(True)
-        self.update_mapping_status_label()
+        # self.update_mapping_status_label() # This is called by the trace on mapping_dirty
 
-    def update_mapping_status_label(self):
-        if self.mapping_dirty.get():
-            self.mapping_status_label.config(text="* Unsaved changes", foreground="red")
-        else:
-            self.mapping_status_label.config(text="")
+    def update_mapping_status_label(self): # This is called by the trace on mapping_dirty
+        if hasattr(self, 'mapping_status_label'): # Ensure widget exists
+            if self.mapping_dirty.get():
+                self.mapping_status_label.config(text="* Unsaved changes", foreground="red")
+            else:
+                self.mapping_status_label.config(text="")
 
     def create_csv_mapping_tab(self, frame):
         top_frame = ttk.Frame(frame, padding=(10, 5)); top_frame.pack(fill="x")
         ttk.Button(top_frame, text="Load CSV Header", command=self.populate_csv_mapping_tab).pack(side="left", padx=5)
-        ttk.Button(top_frame, text="Save Column Mappings", command=self.save_csv_mapping_tab).pack(side="left", padx=5) # Renamed button
+        ttk.Button(top_frame, text="Save Column Mappings", command=self.save_csv_mapping_tab).pack(side="left", padx=5) 
         
-        self.mapping_status_label = ttk.Label(top_frame, text="", foreground="red") # Label for dirty state
+        self.mapping_status_label = ttk.Label(top_frame, text="", foreground="red") 
         self.mapping_status_label.pack(side="left", padx=10, pady=2)
         self.mapping_dirty.trace_add('write', lambda *args: self.update_mapping_status_label())
 
 
-        canvas_frame = ttk.Frame(frame); canvas_frame.pack(fill="both", expand=True, padx=10, pady=(5, 10)) # Added pady top
+        canvas_frame = ttk.Frame(frame); canvas_frame.pack(fill="both", expand=True, padx=10, pady=(5, 10)) 
         self.csv_mapping_canvas = tk.Canvas(canvas_frame)
         self.csv_mapping_scroll = ttk.Scrollbar(canvas_frame, orient="vertical", command=self.csv_mapping_canvas.yview)
         self.csv_mapping_inner = ttk.Frame(self.csv_mapping_canvas)
@@ -559,7 +571,6 @@ class Application(tk.Tk):
         self.csv_mapping_canvas_window = self.csv_mapping_canvas.create_window((0, 0), window=self.csv_mapping_inner, anchor="nw")
         self.csv_mapping_inner.bind("<Configure>", self._on_mapping_configure); self.csv_mapping_canvas.bind("<Configure>", self._on_canvas_configure)
         
-        # This label will hold instructions or "load CSV" message
         self.mapping_instruction_label = ttk.Label(self.csv_mapping_inner, text="") 
         self.mapping_instruction_label.grid(row=0, column=0, sticky="ew", padx=5, pady=5)
 
@@ -575,7 +586,7 @@ class Application(tk.Tk):
         self.csv_mapping_rows_frame = ttk.Frame(self.csv_mapping_inner); self.csv_mapping_rows_frame.grid(row=2, column=0, sticky="ew") 
         self.csv_mapping_rows_frame.columnconfigure(0, weight=3); self.csv_mapping_rows_frame.columnconfigure(1, weight=2); self.csv_mapping_rows_frame.columnconfigure(2, weight=3); self.csv_mapping_rows_frame.columnconfigure(3, weight=3); self.csv_mapping_rows_frame.columnconfigure(4, weight=1)
         
-        self.populate_csv_mapping_tab() # Initial call to set up the view
+        # self.populate_csv_mapping_tab() # Initial call moved to __init__ after create_widgets
 
     def _on_mapping_configure(self, event): self.csv_mapping_canvas.configure(scrollregion=self.csv_mapping_canvas.bbox("all"))
     def _on_canvas_configure(self, event): canvas_width = event.width; self.csv_mapping_canvas.itemconfig(self.csv_mapping_canvas_window, width=canvas_width)
@@ -584,20 +595,19 @@ class Application(tk.Tk):
         for widget in self.csv_mapping_rows_frame.winfo_children(): widget.destroy()
         self.csv_mapping_entries.clear()
         
-        # Hide header if no CSV is loaded initially by moving it inside the condition
-        header_children = self.csv_mapping_inner.grid_slaves(row=1) # header_frame is at row 1
+        header_children = self.csv_mapping_inner.grid_slaves(row=1) 
         header_frame_widget = header_children[0] if header_children else None
 
         csv_path = self.csv_file.get()
         if not csv_path or not os.path.exists(csv_path):
             self.mapping_instruction_label.config(text="Please load a CSV file from the 'Settings' tab to view and configure column mappings.", foreground="blue")
-            if header_frame_widget: header_frame_widget.grid_remove() # Hide header
+            if header_frame_widget: header_frame_widget.grid_remove() 
             logging.warning("Cannot populate mapping tab: CSV file not selected or found.")
             self.mapping_dirty.set(False)
             return
 
         self.mapping_instruction_label.config(text="Review and adjust the mappings below. Click 'Save Column Mappings' when done.", foreground="black")
-        if header_frame_widget: header_frame_widget.grid() # Show header
+        if header_frame_widget: header_frame_widget.grid() 
 
         try:
             with open(csv_path, "r", encoding="utf-8-sig") as f:
@@ -639,16 +649,14 @@ class Application(tk.Tk):
             ent_target = ttk.Entry(self.csv_mapping_rows_frame, width=20)
             ent_target.insert(0, default_map.get("TargetLabel", original_col))
             ent_target.grid(row=row_idx, column=2, sticky="ew", padx=5, pady=1)
-            ent_target.bind("<KeyRelease>", self.on_mapping_changed) # Track changes on key release
+            ent_target.bind("<KeyRelease>", self.on_mapping_changed) 
             
             cat_var = tk.StringVar(); cat_var.set(default_map.get("Category", ""))
-            # Add trace *after* setting initial value to avoid premature dirtying
             cat_var.trace_add('write', self.on_mapping_changed) 
             
             cat_display_entry = ttk.Entry(self.csv_mapping_rows_frame, textvariable=cat_var, state="readonly", width=18)
             cat_display_entry.grid(row=row_idx, column=3, sticky="ew", padx=5, pady=1)
             
-            # Pass cat_var and original value to compare later if it changed
             original_cat_val = cat_var.get() 
             select_btn = ttk.Button(self.csv_mapping_rows_frame, text="...", width=3, 
                                     command=lambda v=cat_var, ov=original_cat_val: self.open_category_selector(v, ov))
@@ -659,7 +667,7 @@ class Application(tk.Tk):
             
         self.csv_mapping_canvas.update_idletasks(); self.csv_mapping_canvas.configure(scrollregion=self.csv_mapping_canvas.bbox("all"))
         logging.info(f"CSV mapping tab populated with {row_idx} entries.")
-        self.mapping_dirty.set(False) # Reset dirty state after populating
+        self.mapping_dirty.set(False) 
     
     def save_csv_mapping_tab(self):
         new_mapping = {}
@@ -668,12 +676,12 @@ class Application(tk.Tk):
             if mtype and target: new_mapping[norm_col] = {"MappingType": mtype, "TargetLabel": target, "Category": cat}
             elif mtype != "Ignore": logging.warning(f"Mapping ignored for CSV column '{norm_col}' due to missing Type or Target Label.")
         self.mapping = new_mapping
-        self.mapping_dirty.set(False) # Reset dirty state
+        self.mapping_dirty.set(False) 
         logging.info(f"CSV mapping updated and saved internally ({len(self.mapping)} rules).")
         messagebox.showinfo("Mapping Saved", "Column mapping rules have been updated.\nRemember to save the project to persist these changes across sessions.")
     
     def open_category_selector(self, cat_var, original_value_for_var):
-        win = tk.Toplevel(self); win.title("Select Categories"); win.geometry("400x400"); win.transient(self); win.grab_set() # Slightly wider
+        win = tk.Toplevel(self); win.title("Select Categories"); win.geometry("400x400"); win.transient(self); win.grab_set() 
         
         instruction_frame = ttk.Frame(win, padding=(10,5))
         instruction_frame.pack(fill="x")
@@ -698,12 +706,8 @@ class Application(tk.Tk):
             selected_indices = cat_listbox.curselection()
             selected_full_paths = [self.category_display_map[display_categories[i]] for i in selected_indices]
             new_value = ",".join(selected_full_paths)
-            # Only set dirty if value actually changed from what it was when dialog opened
-            # cat_var.trace will handle setting self.mapping_dirty if the value is different from *before* the trace.
-            # This check is more specific to the dialog's action.
-            if new_value != original_value_for_var:
-                 cat_var.set(new_value) # This will trigger the trace if set up correctly
-                 # self.on_mapping_changed() # Explicit call if trace isn't reliable enough cross-dialog
+            if new_value != original_value_for_var: # Check if value actually changed
+                 cat_var.set(new_value) # This will trigger the trace to set dirty
             win.destroy()
             
         def on_cancel(): win.destroy()
@@ -1001,13 +1005,13 @@ class Application(tk.Tk):
         self.current_project_path = path; self.title(f"OI Import Generator - [{os.path.basename(path)}]")
         if "categories" in loaded_cfg: self.categories = loaded_cfg["categories"]; self.refresh_categories_listbox()
         if "special_char_map" in loaded_cfg: self.special_char_map = loaded_cfg["special_char_map"]; self.populate_special_mapping_tab()
-        self.load_config_values(loaded_cfg) # This will call populate_csv_mapping_tab which resets dirty flag
+        self.load_config_values(loaded_cfg) 
         for item_id in self.reprocess_tree.get_children(): self.reprocess_tree.delete(item_id)
         self.reprocess_entries.clear(); self.generate_reprocess_button.config(state=tk.DISABLED)
         logging.info(f"Project loaded successfully from: {path}"); messagebox.showinfo("Project Opened", f"Successfully loaded project:\n{path}")
 
     def save_project(self):
-        self.save_csv_mapping_tab(); self.save_special_mapping_tab() # save_csv_mapping_tab will reset dirty flag
+        self.save_csv_mapping_tab(); self.save_special_mapping_tab() 
         path_to_save = self.current_project_path
         if not path_to_save:
             path_to_save = filedialog.asksaveasfilename(title="Save Project As...", defaultextension=".json", filetypes=[("OI Project Files","*.json"), ("All Files","*.*")])

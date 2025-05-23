@@ -489,40 +489,36 @@ class TestProcessRow(unittest.TestCase):
 
 class TestApplicationUI(unittest.TestCase):
     def setUp(self):
-        # Patch db_handler.init_db to always return True for UI tests
-        # to avoid actual DB file creation/dependency during UI component tests.
         self.db_init_patch = patch('db_handler.init_db', return_value=True)
         self.mock_db_init = self.db_init_patch.start()
 
         self.app = oi_generator.Application()
-        self.app.withdraw()  # Prevent window from showing
-        self.app.update_idletasks() # Ensure widgets are initialized
+        self.app.withdraw()  
+        self.app.update_idletasks() 
 
     def tearDown(self):
         self.app.destroy()
-        self.db_init_patch.stop() # Stop the patch
+        self.db_init_patch.stop() 
+
+    def test_application_instantiation_via_setup(self):
+        # The setUp method already creates self.app.
+        # If setUp completes without error, and self.app exists,
+        # then the basic instantiation worked.
+        self.assertIsNotNone(self.app, "Application instance (self.app) should be created by setUp.")
+        self.assertTrue(isinstance(self.app, oi_generator.Application), "self.app is not an instance of Application.")
+        # No need to call destroy() here, tearDown will handle it.
 
     def test_ttk_theme_applied(self):
-        # Check if the 'clam' theme was attempted to be used.
-        # ttk.Style().theme_used() returns the currently active theme.
-        # If 'clam' is not available on the system, it might fall back.
-        # So, we check if 'clam' is the one currently used, or if not, that it was attempted.
-        current_theme = self.app.style.theme_use() # Gets current theme if one was set by theme_use('clam')
+        current_theme = self.app.style.theme_use() 
         if 'clam' in self.app.style.theme_names():
              self.assertEqual(current_theme, 'clam', "TTK theme 'clam' should be active if available.")
         else:
-            # If clam is not available, this test might not be as meaningful for current_theme.
-            # However, the application logs a warning if 'clam' is not found.
-            # For this test, we'll assume if 'clam' is not the current_theme, it was due to unavailability.
-            # A more robust test would require checking logs or mocking style.theme_use itself.
             self.assertTrue(True, "Assuming 'clam' theme was attempted; its availability depends on the test environment.")
 
 
-    @patch('os.path.exists', return_value=True) # Assume dummy CSV exists
+    @patch('os.path.exists', return_value=True) 
     @patch('builtins.open', new_callable=mock_open)
     def test_mapping_instruction_label_states(self, mock_file_open, mock_os_exists):
-        # No CSV loaded initially (as per how populate_csv_mapping_tab is called in __init__)
-        # Manually clear csv_file for a clean "No CSV" state test
         self.app.csv_file.set("")
         self.app.populate_csv_mapping_tab()
         self.assertIn("Please load a CSV file", self.app.mapping_instruction_label.cget("text"))
@@ -531,10 +527,8 @@ class TestApplicationUI(unittest.TestCase):
         self.assertFalse(header_frame[0].winfo_ismapped() if header_frame else True, "Header frame should be hidden when no CSV")
 
 
-        # CSV Loaded - Headers Populated
         self.app.csv_file.set("dummy.csv")
-        mock_file_open.return_value.read.return_value = "col1,col2\nval1,val2" # Sample CSV content
-        # Configure csv.reader to be used within populate_csv_mapping_tab
+        mock_file_open.return_value.read.return_value = "col1,col2\nval1,val2" 
         with patch('csv.reader', return_value=[['col1', 'col2']]) as mock_csv_reader:
             self.app.populate_csv_mapping_tab()
             mock_csv_reader.assert_called_once() 
@@ -544,10 +538,9 @@ class TestApplicationUI(unittest.TestCase):
         self.assertTrue(header_frame[0].winfo_ismapped() if header_frame else False, "Header frame should be visible")
 
 
-        # Empty CSV (no headers)
         self.app.csv_file.set("empty.csv")
-        mock_file_open.return_value.read.return_value = "" # Empty content
-        with patch('csv.reader', side_effect=StopIteration) as mock_csv_reader_empty: # Simulate no headers
+        mock_file_open.return_value.read.return_value = "" 
+        with patch('csv.reader', side_effect=StopIteration) as mock_csv_reader_empty: 
             self.app.populate_csv_mapping_tab()
             mock_csv_reader_empty.assert_called_once()
         self.assertIn("appears to be empty or has no headers", self.app.mapping_instruction_label.cget("text"))
@@ -556,40 +549,36 @@ class TestApplicationUI(unittest.TestCase):
         self.assertFalse(header_frame[0].winfo_ismapped() if header_frame else True, "Header frame should be hidden for empty CSV")
 
 
-    @patch('tkinter.messagebox.showinfo') # Mock showinfo to avoid GUI pop-ups
+    @patch('tkinter.messagebox.showinfo') 
     def test_mapping_dirty_state_logic(self, mock_showinfo):
         self.assertFalse(self.app.mapping_dirty.get(), "Mapping should not be dirty initially.")
         self.assertEqual(self.app.mapping_status_label.cget("text"), "", "Status label should be empty initially.")
 
-        # Simulate a change
         self.app.on_mapping_changed()
         self.assertTrue(self.app.mapping_dirty.get(), "Mapping should be dirty after on_mapping_changed.")
         self.assertEqual(self.app.mapping_status_label.cget("text"), "*Unsaved changes", "Status label should show unsaved changes.")
         self.assertEqual(self.app.mapping_status_label.cget("foreground"), "red")
 
-        # Simulate saving
         self.app.save_csv_mapping_tab()
         self.assertFalse(self.app.mapping_dirty.get(), "Mapping should not be dirty after saving.")
         self.assertEqual(self.app.mapping_status_label.cget("text"), "", "Status label should be empty after saving.")
-        mock_showinfo.assert_called_once() # Ensure user is informed
+        mock_showinfo.assert_called_once() 
 
-        # Simulate loading new CSV data (which calls populate_csv_mapping_tab)
-        self.app.on_mapping_changed() # Make it dirty again
+        self.app.on_mapping_changed() 
         self.assertTrue(self.app.mapping_dirty.get()) 
         
         with patch('os.path.exists', return_value=True), \
              patch('builtins.open', mock_open(read_data="colA,colB\n1,2")), \
              patch('csv.reader', return_value=[['colA', 'colB']]):
-            self.app.csv_file.set("another_dummy.csv") # Setting this should trigger populate via browse_csv if it were used, or manually call
-            self.app.populate_csv_mapping_tab() # Manually call as browse_csv is not directly tested here for this interaction
+            self.app.csv_file.set("another_dummy.csv") 
+            self.app.populate_csv_mapping_tab() 
 
         self.assertFalse(self.app.mapping_dirty.get(), "Mapping should not be dirty after populating new data.")
         self.assertEqual(self.app.mapping_status_label.cget("text"), "", "Status label should be empty after populating.")
 
 
     def test_settings_tab_essential_frames_created(self):
-        # create_settings_tab is called during app initialization via create_widgets
-        self.app.update_idletasks() # Ensure layout is processed
+        self.app.update_idletasks() 
 
         children = self.app.settings_frame.winfo_children()
         frame_texts = [child.cget('text') for child in children if isinstance(child, ttk.LabelFrame)]
