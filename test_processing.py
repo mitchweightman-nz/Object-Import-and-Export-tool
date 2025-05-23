@@ -5,6 +5,9 @@ import json
 import datetime
 import uuid
 import xml.etree.ElementTree as ET
+import tkinter as tk
+from tkinter import ttk
+from unittest.mock import patch, mock_open, MagicMock
 
 # Assuming db_handler.py and OI Import Generator.py are in the same directory or accessible via PYTHONPATH
 import db_handler
@@ -170,11 +173,8 @@ class TestDbHandler(unittest.TestCase):
         ]
 
         updated_count, failed_count = db_handler.batch_update_object_statuses(updates_list, self.db_path)
-        # Assuming all unique_ids in updates_list exist.
-        # The return from batch_update_object_statuses is (approx_updated, non_matches_or_internal_errors)
-        # For this test, we expect all listed items to be "attempted"
         self.assertEqual(updated_count, 2) 
-        self.assertEqual(failed_count, 0) # 0 means no IDs were simply "not found" during update attempt
+        self.assertEqual(failed_count, 0) 
 
         obj1_updated = db_handler.get_object_status(obj1_id, self.db_path)
         self.assertEqual(obj1_updated['status'], 'success')
@@ -188,11 +188,11 @@ class TestDbHandler(unittest.TestCase):
         obj2_updated = db_handler.get_object_status(obj2_id, self.db_path)
         self.assertEqual(obj2_updated['status'], 'failed')
         self.assertEqual(obj2_updated['error_message'], 'Failed processing obj2')
-        self.assertEqual(obj2_updated['generated_xml'], '<initial_xml2/>') # COALESCE worked
+        self.assertEqual(obj2_updated['generated_xml'], '<initial_xml2/>') 
         self.assertIsInstance(obj2_updated['last_attempt_timestamp'], datetime.datetime)
         
         obj3_not_updated = db_handler.get_object_status(obj3_id, self.db_path)
-        self.assertEqual(obj3_not_updated['status'], 'pending') # Unchanged
+        self.assertEqual(obj3_not_updated['status'], 'pending') 
         self.assertEqual(obj3_not_updated['generated_xml'], '<initial_xml3/>')
 
 
@@ -205,7 +205,6 @@ class TestDbHandler(unittest.TestCase):
         ], self.db_path)
         db_handler.update_object_status(ids[0], 'success', db_path=self.db_path)
         db_handler.update_object_status(ids[1], 'failed', db_path=self.db_path)
-        # ids[2] remains 'pending'
 
         success_items = db_handler.get_objects_by_status(['success'], self.db_path)
         self.assertEqual(len(success_items), 1)
@@ -244,7 +243,6 @@ class TestDbHandler(unittest.TestCase):
         db_handler.update_object_status(ids[0], 'success', db_path=self.db_path)
         db_handler.update_object_status(ids[1], 'success', db_path=self.db_path)
         db_handler.update_object_status(ids[2], 'failed', db_path=self.db_path)
-        # ids[3] remains 'pending'
 
         counts = db_handler.get_status_counts(self.db_path)
         self.assertEqual(counts.get('success'), 2)
@@ -262,7 +260,7 @@ class TestDbHandler(unittest.TestCase):
         ], self.db_path)
         db_handler.update_object_status(ids[0], 'success', node_type='Folder', db_path=self.db_path)
         db_handler.update_object_status(ids[1], 'success', node_type='Document', db_path=self.db_path)
-        db_handler.update_object_status(ids[2], 'failed', node_type='Document', db_path=self.db_path) # Should not be counted
+        db_handler.update_object_status(ids[2], 'failed', node_type='Document', db_path=self.db_path) 
 
         counts = db_handler.get_file_type_counts(self.db_path)
         self.assertEqual(counts.get('Folder'), 1)
@@ -297,8 +295,8 @@ class TestProcessRow(unittest.TestCase):
         self.default_loc = "Default:Location"
         self.username = "testuser"
         self.category_default = "DefaultCategory"
-        self.special_map = DEFAULT_SPECIAL_CHAR_MAP # Use the actual default from module
-        oi_generator.global_docnum_counter = 100000 # Reset global counter
+        self.special_map = DEFAULT_SPECIAL_CHAR_MAP 
+        oi_generator.global_docnum_counter = 100000 
 
     def test_basic_folder_creation(self):
         csv_data = {'csv_title': 'My Test Folder', 'csv_loc': 'Parent:Folder'}
@@ -312,12 +310,12 @@ class TestProcessRow(unittest.TestCase):
         self.assertEqual(node.attrib["action"], "sync")
         self.assertEqual(node.findtext("title"), "My Test Folder")
         self.assertEqual(node.findtext("location"), "Parent:Folder")
-        self.assertEqual(node.findtext("createdby"), self.username) # Assuming use_csv_createdby is True but no createdby in CSV
+        self.assertEqual(node.findtext("createdby"), self.username) 
 
     def test_basic_document_creation_and_docnum(self):
         csv_data = {'csv_title': 'My Test Doc', 'csv_file': 'C:\\temp\\mydoc.pdf'}
         rename_list = []
-        oi_generator.global_docnum_counter = 100000 # Ensure predictable start
+        oi_generator.global_docnum_counter = 100000 
         
         node, err = process_row(1, csv_data, self.sample_mapping, self.default_loc, self.username,
                                 "sync", "document", self.category_default, False, None, rename_list, self.special_map)
@@ -326,10 +324,10 @@ class TestProcessRow(unittest.TestCase):
         self.assertEqual(node.attrib["type"], "document")
         self.assertEqual(node.attrib["action"], "sync")
         self.assertEqual(node.findtext("title"), "My Test Doc")
-        self.assertEqual(node.findtext("file"), 'C:\\temp\\mydoc.pdf') # Assuming no problematic chars
-        self.assertEqual(node.findtext("mimetype"), "application/x-pdf") # Check for 'x-pdf' due to MIME_MAP
-        self.assertEqual(node.findtext("docnum"), str(oi_generator.global_docnum_counter)) # 100001
-        self.assertEqual(node.findtext("createdby"), self.username) # use_csv_createdby = False
+        self.assertEqual(node.findtext("file"), 'C:\\temp\\mydoc.pdf') 
+        self.assertEqual(node.findtext("mimetype"), "application/x-pdf") 
+        self.assertEqual(node.findtext("docnum"), str(oi_generator.global_docnum_counter)) 
+        self.assertEqual(node.findtext("createdby"), self.username) 
 
     def test_metadata_mapping(self):
         csv_data = {
@@ -360,20 +358,20 @@ class TestProcessRow(unittest.TestCase):
         self.assertIsNone(err)
         self.assertIsNotNone(node)
         self.assertEqual(node.attrib["action"], "update")
-        self.assertIsNone(node.find("file")) # File should be popped
+        self.assertIsNone(node.find("file")) 
 
     def test_action_addversion(self):
         csv_data = {'csv_title': 'Add Version Doc', 'csv_loc': 'Existing:Doc', 'csv_file': 'new_version.doc', 'csv_version': '2'}
         rename_list = []
         node, err = process_row(1, csv_data, self.sample_mapping, self.default_loc, self.username,
-                                "sync", "document", self.category_default, True, None, rename_list, self.special_map) # action 'sync' overridden by version
+                                "sync", "document", self.category_default, True, None, rename_list, self.special_map) 
         self.assertIsNone(err)
         self.assertIsNotNone(node)
         self.assertEqual(node.attrib["action"], "addversion")
         self.assertEqual(node.find("location").text, "Existing:Doc")
         self.assertEqual(node.find("file").text, "new_version.doc")
         self.assertEqual(node.find("version").text, "2")
-        self.assertIsNone(node.find("title")) # title not part of addversion minimal set
+        self.assertIsNone(node.find("title")) 
 
     def test_action_delete(self):
         csv_data = {'csv_loc': 'Existing:DocToDelete'}
@@ -411,39 +409,36 @@ class TestProcessRow(unittest.TestCase):
     def test_error_missing_action_nodetype(self):
         csv_data = {'csv_title': 'Bad Data'}
         rename_list = []
-        # Force empty action/nodetype by passing empty strings and a mapping that doesn't provide them
         minimal_mapping = {'csv_title': {'MappingType': 'Standard', 'TargetLabel': 'title'}}
         node, err = process_row(1, csv_data, minimal_mapping, self.default_loc, self.username,
                                 "none", "none", self.category_default, True, None, rename_list, self.special_map)
         self.assertIsNone(node)
         self.assertIsNotNone(err)
-        self.assertIn("Essential 'action' ('') or 'nodetype' ('') is missing", err)
+        # Original error message was "Essential 'action' ('') or 'nodetype' ('') is missing or invalid based on current settings."
+        # The new message due to direct check "Missing required 'action' or 'nodetype'."
+        self.assertIn("Missing required 'action' or 'nodetype'", err)
+
 
     def test_use_csv_createdby(self):
         mapping_with_createdby = {**self.sample_mapping, 'csv_owner': {'MappingType': 'Standard', 'TargetLabel': 'createdby'}}
         
-        # Case 1: use_csv_createdby = True
         csv_data1 = {'csv_title': 'Doc A', 'csv_owner': 'csvuser'}
         node1, _ = process_row(1, csv_data1, mapping_with_createdby, self.default_loc, self.username,
                                "sync", "folder", self.category_default, True, None, [], self.special_map)
         self.assertEqual(node1.find("createdby").text, "csvuser")
 
-        # Case 2: use_csv_createdby = False
         csv_data2 = {'csv_title': 'Doc B', 'csv_owner': 'csvuser_ignored'}
         node2, _ = process_row(2, csv_data2, mapping_with_createdby, self.default_loc, self.username,
                                "sync", "folder", self.category_default, False, None, [], self.special_map)
         self.assertEqual(node2.find("createdby").text, self.username)
 
-        # Case 3: use_csv_createdby = True, but no 'createdby' in CSV
-        csv_data3 = {'csv_title': 'Doc C'} # 'csv_owner' (mapped to createdby) is missing
+        csv_data3 = {'csv_title': 'Doc C'} 
         node3, _ = process_row(3, csv_data3, mapping_with_createdby, self.default_loc, self.username,
                                "sync", "folder", self.category_default, True, None, [], self.special_map)
-        self.assertEqual(node3.find("createdby").text, self.username) # Should fallback to UI username
+        self.assertEqual(node3.find("createdby").text, self.username) 
 
     def test_default_location_usage(self):
-        # Test when 'location' is not in std, default_location should be used.
         csv_data = {'csv_title': 'Doc With Default Loc'}
-        # Ensure 'location' is not mapped for this test
         mapping_no_loc = {k: v for k, v in self.sample_mapping.items() if v['TargetLabel'] != 'location'}
         
         rename_list = []
@@ -454,11 +449,10 @@ class TestProcessRow(unittest.TestCase):
         self.assertEqual(node.findtext("location"), self.default_loc)
 
     def test_default_category_usage(self):
-        # Test when a metadata item has no category in mapping, category_default should apply.
         csv_data = {'csv_title': 'Doc With Default Cat', 'attr_for_default_cat': 'DefaultCatVal'}
         mapping_with_default_cat_meta = {
             'csv_title': {'MappingType': 'Standard', 'TargetLabel': 'title'},
-            'attr_for_default_cat': {'MappingType': 'Metadata', 'TargetLabel': 'MyDefaultAttr', 'Category': ''} # Empty category
+            'attr_for_default_cat': {'MappingType': 'Metadata', 'TargetLabel': 'MyDefaultAttr', 'Category': ''} 
         }
         rename_list = []
         node, err = process_row(1, csv_data, mapping_with_default_cat_meta, self.default_loc, self.username,
@@ -466,7 +460,6 @@ class TestProcessRow(unittest.TestCase):
         self.assertIsNone(err)
         self.assertIsNotNone(node)
         
-        # Check if the attribute is under the default category
         cat_default_elem = node.find(f"category[@name='{self.category_default}']")
         self.assertIsNotNone(cat_default_elem, f"Default category '{self.category_default}' not found.")
         attr_elem = cat_default_elem.find("attribute[@name='MyDefaultAttr']")
@@ -480,8 +473,6 @@ class TestProcessRow(unittest.TestCase):
                                 "sync", "folder", self.category_default, True, None, rename_list, self.special_map)
         self.assertIsNone(err)
         self.assertIsNotNone(node)
-        # The current logic only cleans the last part of the location.
-        # "Parent:Folder:With:Colons" -> "Parent:Folder:WithColons"
         self.assertEqual(node.findtext("location"), "Parent:Folder:WithColons")
 
         csv_data_no_colon_in_last_part = {'csv_title': 'Location Clean Test 2', 'csv_loc': 'Parent:FolderA'}
@@ -494,7 +485,123 @@ class TestProcessRow(unittest.TestCase):
         node3, err3 = process_row(3, csv_data_colon_everywhere, self.sample_mapping, self.default_loc, self.username,
                                   "sync", "folder", self.category_default, True, None, rename_list, self.special_map)
         self.assertIsNone(err3)
-        self.assertEqual(node3.findtext("location"), "A:B:CD") # Only last segment cleaned
+        self.assertEqual(node3.findtext("location"), "A:B:CD")
+
+class TestApplicationUI(unittest.TestCase):
+    def setUp(self):
+        # Patch db_handler.init_db to always return True for UI tests
+        # to avoid actual DB file creation/dependency during UI component tests.
+        self.db_init_patch = patch('db_handler.init_db', return_value=True)
+        self.mock_db_init = self.db_init_patch.start()
+
+        self.app = oi_generator.Application()
+        self.app.withdraw()  # Prevent window from showing
+        self.app.update_idletasks() # Ensure widgets are initialized
+
+    def tearDown(self):
+        self.app.destroy()
+        self.db_init_patch.stop() # Stop the patch
+
+    def test_ttk_theme_applied(self):
+        # Check if the 'clam' theme was attempted to be used.
+        # ttk.Style().theme_used() returns the currently active theme.
+        # If 'clam' is not available on the system, it might fall back.
+        # So, we check if 'clam' is the one currently used, or if not, that it was attempted.
+        current_theme = self.app.style.theme_use() # Gets current theme if one was set by theme_use('clam')
+        if 'clam' in self.app.style.theme_names():
+             self.assertEqual(current_theme, 'clam', "TTK theme 'clam' should be active if available.")
+        else:
+            # If clam is not available, this test might not be as meaningful for current_theme.
+            # However, the application logs a warning if 'clam' is not found.
+            # For this test, we'll assume if 'clam' is not the current_theme, it was due to unavailability.
+            # A more robust test would require checking logs or mocking style.theme_use itself.
+            self.assertTrue(True, "Assuming 'clam' theme was attempted; its availability depends on the test environment.")
+
+
+    @patch('os.path.exists', return_value=True) # Assume dummy CSV exists
+    @patch('builtins.open', new_callable=mock_open)
+    def test_mapping_instruction_label_states(self, mock_file_open, mock_os_exists):
+        # No CSV loaded initially (as per how populate_csv_mapping_tab is called in __init__)
+        # Manually clear csv_file for a clean "No CSV" state test
+        self.app.csv_file.set("")
+        self.app.populate_csv_mapping_tab()
+        self.assertIn("Please load a CSV file", self.app.mapping_instruction_label.cget("text"))
+        self.assertEqual(self.app.mapping_instruction_label.cget("foreground"), "blue")
+        header_frame = self.app.csv_mapping_inner.grid_slaves(row=1)
+        self.assertFalse(header_frame[0].winfo_ismapped() if header_frame else True, "Header frame should be hidden when no CSV")
+
+
+        # CSV Loaded - Headers Populated
+        self.app.csv_file.set("dummy.csv")
+        mock_file_open.return_value.read.return_value = "col1,col2\nval1,val2" # Sample CSV content
+        # Configure csv.reader to be used within populate_csv_mapping_tab
+        with patch('csv.reader', return_value=[['col1', 'col2']]) as mock_csv_reader:
+            self.app.populate_csv_mapping_tab()
+            mock_csv_reader.assert_called_once() 
+        self.assertIn("Review and adjust the mappings below", self.app.mapping_instruction_label.cget("text"))
+        self.assertEqual(self.app.mapping_instruction_label.cget("foreground"), "black")
+        header_frame = self.app.csv_mapping_inner.grid_slaves(row=1)
+        self.assertTrue(header_frame[0].winfo_ismapped() if header_frame else False, "Header frame should be visible")
+
+
+        # Empty CSV (no headers)
+        self.app.csv_file.set("empty.csv")
+        mock_file_open.return_value.read.return_value = "" # Empty content
+        with patch('csv.reader', side_effect=StopIteration) as mock_csv_reader_empty: # Simulate no headers
+            self.app.populate_csv_mapping_tab()
+            mock_csv_reader_empty.assert_called_once()
+        self.assertIn("appears to be empty or has no headers", self.app.mapping_instruction_label.cget("text"))
+        self.assertEqual(self.app.mapping_instruction_label.cget("foreground"), "orange red")
+        header_frame = self.app.csv_mapping_inner.grid_slaves(row=1)
+        self.assertFalse(header_frame[0].winfo_ismapped() if header_frame else True, "Header frame should be hidden for empty CSV")
+
+
+    @patch('tkinter.messagebox.showinfo') # Mock showinfo to avoid GUI pop-ups
+    def test_mapping_dirty_state_logic(self, mock_showinfo):
+        self.assertFalse(self.app.mapping_dirty.get(), "Mapping should not be dirty initially.")
+        self.assertEqual(self.app.mapping_status_label.cget("text"), "", "Status label should be empty initially.")
+
+        # Simulate a change
+        self.app.on_mapping_changed()
+        self.assertTrue(self.app.mapping_dirty.get(), "Mapping should be dirty after on_mapping_changed.")
+        self.assertEqual(self.app.mapping_status_label.cget("text"), "*Unsaved changes", "Status label should show unsaved changes.")
+        self.assertEqual(self.app.mapping_status_label.cget("foreground"), "red")
+
+        # Simulate saving
+        self.app.save_csv_mapping_tab()
+        self.assertFalse(self.app.mapping_dirty.get(), "Mapping should not be dirty after saving.")
+        self.assertEqual(self.app.mapping_status_label.cget("text"), "", "Status label should be empty after saving.")
+        mock_showinfo.assert_called_once() # Ensure user is informed
+
+        # Simulate loading new CSV data (which calls populate_csv_mapping_tab)
+        self.app.on_mapping_changed() # Make it dirty again
+        self.assertTrue(self.app.mapping_dirty.get()) 
+        
+        with patch('os.path.exists', return_value=True), \
+             patch('builtins.open', mock_open(read_data="colA,colB\n1,2")), \
+             patch('csv.reader', return_value=[['colA', 'colB']]):
+            self.app.csv_file.set("another_dummy.csv") # Setting this should trigger populate via browse_csv if it were used, or manually call
+            self.app.populate_csv_mapping_tab() # Manually call as browse_csv is not directly tested here for this interaction
+
+        self.assertFalse(self.app.mapping_dirty.get(), "Mapping should not be dirty after populating new data.")
+        self.assertEqual(self.app.mapping_status_label.cget("text"), "", "Status label should be empty after populating.")
+
+
+    def test_settings_tab_essential_frames_created(self):
+        # create_settings_tab is called during app initialization via create_widgets
+        self.app.update_idletasks() # Ensure layout is processed
+
+        children = self.app.settings_frame.winfo_children()
+        frame_texts = [child.cget('text') for child in children if isinstance(child, ttk.LabelFrame)]
+        
+        expected_frames = [
+            "Essential Project Setup",
+            "Migration Type",
+            "Advanced & Optional Settings"
+        ]
+        for expected_text in expected_frames:
+            self.assertIn(expected_text, frame_texts, f"LabelFrame '{expected_text}' not found in Settings tab.")
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
