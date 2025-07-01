@@ -775,11 +775,20 @@ class Application(tk.Tk):
         for cat in sorted(self.categories): self.cat_listbox.insert(tk.END, cat)
         logging.debug("Categories listbox refreshed.")
     def add_category(self):
-        new_cat = simpledialog.askstring("Add Category", "Enter full category path:", parent=self) 
-        if new_cat and new_cat.strip(): stripped_cat = new_cat.strip()
-        if stripped_cat not in self.categories: self.categories.append(stripped_cat); self.refresh_categories_listbox(); logging.info(f"Added category: {stripped_cat}")
-        else: logging.warning(f"Category '{stripped_cat}' already exists."); messagebox.showwarning("Duplicate", "Category already exists.")
-        elif new_cat is not None: messagebox.showwarning("Invalid Input", "Category path cannot be empty.")
+        new_cat_input = simpledialog.askstring("Add Category", "Enter full category path:", parent=self)
+        if new_cat_input is not None:  # User provided some input (didn't cancel)
+            stripped_cat = new_cat_input.strip()
+            if stripped_cat:  # Input was not just whitespace
+                if stripped_cat not in self.categories:
+                    self.categories.append(stripped_cat)
+                    self.refresh_categories_listbox()
+                    logging.info(f"Added category: {stripped_cat}")
+                else:
+                    logging.warning(f"Category '{stripped_cat}' already exists.")
+                    messagebox.showwarning("Duplicate", "Category already exists.")
+            else:  # Input was empty or just whitespace
+                messagebox.showwarning("Invalid Input", "Category path cannot be empty.")
+        # If new_cat_input is None (user pressed Cancel), do nothing.
     def remove_categories(self):
         selected_indices = self.cat_listbox.curselection()
         if not selected_indices: messagebox.showwarning("No Selection", "Please select categories to remove."); return
