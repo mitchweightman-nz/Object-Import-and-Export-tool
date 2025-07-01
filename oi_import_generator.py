@@ -42,6 +42,12 @@ except ImportError:
      # Exit or disable DB functionality? Exiting is safer.
      exit() # Or raise ImportError("db_handler.py not found")
 
+# --- Import XML to CSV Converter ---
+try:
+    from xml_to_csv_converter import convert_xml_to_csv
+except ImportError:
+    logging.error("xml_to_csv_converter.py not found. XML to CSV functionality will be disabled.")
+    convert_xml_to_csv = None
 
 # -------------------- Logging Setup --------------------
 log_queue = queue.Queue()
@@ -179,39 +185,80 @@ def process_row(row_index, csv_data, mapping, default_location, username, select
         original_file = std.get("file") or std.get("filepath")
         if original_file:
             try:
-                dir_name, base_name = os.path.split(original_file)
-                new_base = base_name.replace(":", "")
-                new_file = os.path.join(dir_name, new_base)
-                if new_file != original_file: rename_list.append((original_file, new_file))
-                if "file" in std: std["file"] = new_file
-                elif "filepath" in std: std["filepath"] = new_file
+                # Standardize to forward slashes first for internal consistency
+                standardized_path = original_file.replace('\\', '/')
+                # Normalize (e.g. handles .. or . segments, redundant slashes)
+                normalized_path = os.path.normpath(standardized_path)
+
+                dir_name, base_name = os.path.split(normalized_path)
+                new_base = base_name.replace(":", "") # Clean colons from filename part
+
+                # Reconstruct path using forward slashes for XML consistency
+                # os.path.join might use backslashes on Windows.
+                # We want a consistent path representation in the XML.
+                if not dir_name or dir_name == '.': # Handles "file.txt" and "./file.txt"
+                    xml_path_representation = new_base
+                else:
+                    # Ensure dir_name also uses forward slashes
+                    dir_name_fwd = dir_name.replace(os.sep, '/')
+                    xml_path_representation = f"{dir_name_fwd}/{new_base}"
+
+                # Check if a rename is needed based on the standardized forward-slash representation
+                if xml_path_representation != standardized_path:
+                    # Log original and the new forward-slash representation for rename script
+                    rename_list.append((original_file, xml_path_representation))
+
+                if "file" in std: std["file"] = xml_path_representation
+                elif "filepath" in std: std["filepath"] = xml_path_representation
+
                 ext_field = os.path.splitext(new_base)[1].lower()
                 mime_type = MIME_MAP.get(ext_field.lstrip("."), "")
                 if mime_type: std["mimetype"] = mime_type
                 elif std.get("nodetype", "").lower() == "document": std["mimetype"] = "application/octet-stream"
             except Exception as e: logging.warning(f"Row {row_index}: Error processing file path '{original_file}': {e}")
+
         action_lower = std.get("action", "").lower()
+        if action_lower == "update (metadata)": # Corrected logic for action
+            std["action"] = "update"
+            action_lower = "update" # ensure action_lower is also updated
+            std.pop("file", None)
+            std.pop("filepath", None)
+
         node_type_lower = std.get("nodetype", "").lower()
         if not action_lower or not node_type_lower: raise ValueError("Missing required 'action' or 'nodetype'.")
-        if action_lower == "update (metadata)":
-            std["action"] = "update"; std.pop("file", None); std.pop("filepath", None)
-        elif action_lower not in ("delete", "addversion"):
+
+        # This was the original position of "update (metadata)" logic, moved it up.
+        # if action_lower == "update (metadata)":
+        #     std["action"] = "update"; std.pop("file", None); std.pop("filepath", None)
+
+        if action_lower not in ("delete", "addversion", "update"): # Added update here
             csv_version_val = std.get("version", "").strip()
             if csv_version_val.isdigit() and int(csv_version_val) > 1: std["version"] = csv_version_val; std["action"] = "addversion"; action_lower = "addversion"
+
         if node_type_lower == "document" and "docnum" not in std and action_lower not in ("delete", "update"): global_docnum_counter += 1; std["docnum"] = str(global_docnum_counter)
         if "title" in std: std["title"] = std["title"].replace(":", "")
+
         if "location" in std and ":" in std["location"]:
-            try: prefix_loc, loc_tail = std["location"].rsplit(":", 1); loc_tail_cleaned = loc_tail.replace(":", ""); std["location"] = f"{prefix_loc}:{loc_tail_cleaned}"
-            except Exception: pass
+            try:
+                parts = std["location"].split(':')
+                if len(parts) > 1:
+                    loc_tail_cleaned = parts[-1].replace(":", "")
+                    prefix_loc = ":".join(parts[:-1])
+                    std["location"] = f"{prefix_loc}:{loc_tail_cleaned}"
+                # If only one part, no colons to clean in the tail part effectively
+            except Exception:
+                pass # Keep original if error
+
         node_attribs = {"type": node_type_lower, "action": action_lower}
         node = ET.Element("node", attrib=node_attribs)
+
         if action_lower in ("addversion", "delete"):
             if "location" in std: loc_val = apply_special_char_replacements(std["location"], special_map); ET.SubElement(node, "location", attrib={"type": "0"}).text = loc_val
             if action_lower == "addversion":
                 file_val = std.get("file") or std.get("filepath")
                 if file_val: ET.SubElement(node, "file", attrib={"type": "0"}).text = apply_special_char_replacements(file_val, special_map)
                 if "version" in std: ET.SubElement(node, "version").text = std["version"]
-        else:
+        else: # Covers create, sync, update
             if node_type_lower == "document" and "mimetype" not in std: std["mimetype"] = "application/octet-stream"
             add_standard_elements(node, std, special_map)
             for cat_name, meta_fields in meta_by_cat.items():
@@ -423,8 +470,18 @@ class Application(tk.Tk):
         self.refresh_categories_listbox()
         self.populate_special_mapping_tab()
         self.populate_csv_mapping_tab() # Explicit call after widgets are created
+        self.create_menu() # Add this line
         
         self.protocol("WM_DELETE_WINDOW", self.on_closing); logging.info("Application initialized.")
+
+    def create_menu(self):
+        menubar = tk.Menu(self)
+        tools_menu = tk.Menu(menubar, tearoff=0)
+        tools_menu.add_command(label="Convert XML to CSV", command=lambda: perform_xml_to_csv_conversion(self))
+        # Add other tools here if needed in the future
+        menubar.add_cascade(label="Tools", menu=tools_menu)
+        self.config(menu=menubar)
+        logging.info("Application menu created with XML to CSV tool.")
 
     def load_config_values(self, config):
         logging.debug("Loading UI values from configuration dictionary.")
@@ -774,12 +831,21 @@ class Application(tk.Tk):
         self.cat_listbox.delete(0, tk.END)
         for cat in sorted(self.categories): self.cat_listbox.insert(tk.END, cat)
         logging.debug("Categories listbox refreshed.")
+
     def add_category(self):
-        new_cat = simpledialog.askstring("Add Category", "Enter full category path:", parent=self) 
-        if new_cat and new_cat.strip(): stripped_cat = new_cat.strip()
-        if stripped_cat not in self.categories: self.categories.append(stripped_cat); self.refresh_categories_listbox(); logging.info(f"Added category: {stripped_cat}")
-        else: logging.warning(f"Category '{stripped_cat}' already exists."); messagebox.showwarning("Duplicate", "Category already exists.")
-        elif new_cat is not None: messagebox.showwarning("Invalid Input", "Category path cannot be empty.")
+        new_cat = simpledialog.askstring("Add Category", "Enter full category path:", parent=self)
+        if new_cat and new_cat.strip():
+            stripped_cat = new_cat.strip()
+            if stripped_cat not in self.categories:
+                self.categories.append(stripped_cat)
+                self.refresh_categories_listbox()
+                logging.info(f"Added category: {stripped_cat}")
+            else:
+                logging.warning(f"Category '{stripped_cat}' already exists.")
+                messagebox.showwarning("Duplicate", "Category already exists.")
+        elif new_cat is not None:
+            messagebox.showwarning("Invalid Input", "Category path cannot be empty.")
+
     def remove_categories(self):
         selected_indices = self.cat_listbox.curselection()
         if not selected_indices: messagebox.showwarning("No Selection", "Please select categories to remove."); return
@@ -1043,6 +1109,56 @@ class Application(tk.Tk):
     def browse_report(self): 
         path = filedialog.askopenfilename(title="Select CSV Report File (Optional)", filetypes=[("CSV Files", "*.csv"), ("All Files", "*.*")])
         if path: self.report_file.set(path)
+
+# -------------------- XML to CSV Conversion Functionality --------------------
+def perform_xml_to_csv_conversion(app_instance):
+    if not convert_xml_to_csv:
+        messagebox.showerror("Converter Error", "XML to CSV converter module is not available.")
+        return
+
+    xml_input_path = filedialog.askopenfilename(
+        title="Select XML File to Convert",
+        filetypes=[("XML files", "*.xml"), ("All files", "*.*")]
+    )
+    if not xml_input_path:
+        logging.info("XML to CSV conversion cancelled by user (no input file selected).")
+        return
+
+    csv_output_path = filedialog.asksaveasfilename(
+        title="Save CSV Output As",
+        defaultextension=".csv",
+        filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+    )
+    if not csv_output_path:
+        logging.info("XML to CSV conversion cancelled by user (no output file selected).")
+        return
+
+    try:
+        logging.info(f"Reading XML file: {xml_input_path}")
+        with open(xml_input_path, 'r', encoding='utf-8') as f_xml:
+            xml_content = f_xml.read()
+
+        logging.info("Starting XML to CSV conversion...")
+        csv_content = convert_xml_to_csv(xml_content)
+
+        if csv_content.startswith("Error:"):
+            logging.error(f"Conversion failed: {csv_content}")
+            messagebox.showerror("Conversion Error", f"Could not convert XML to CSV:\n{csv_content}")
+            return
+
+        logging.info(f"Saving CSV output to: {csv_output_path}")
+        with open(csv_output_path, 'w', encoding='utf-8', newline='') as f_csv:
+            f_csv.write(csv_content)
+
+        logging.info("XML to CSV conversion successful.")
+        messagebox.showinfo("Conversion Successful", f"XML file converted and saved to:\n{csv_output_path}")
+
+    except FileNotFoundError:
+        logging.error(f"File not found during XML to CSV conversion: {xml_input_path}")
+        messagebox.showerror("File Error", f"Input XML file not found:\n{xml_input_path}")
+    except Exception as e:
+        logging.exception("An error occurred during XML to CSV conversion.")
+        messagebox.showerror("Conversion Error", f"An unexpected error occurred:\n{str(e)}")
 
 # -------------------- Main Execution --------------------
 if __name__ == "__main__":
