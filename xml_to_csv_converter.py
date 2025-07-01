@@ -3,7 +3,7 @@
 import xml.etree.ElementTree as ET
 import csv
 from io import StringIO
-import logging # Moved import logging to the top
+import logging
 
 def convert_xml_to_csv(xml_string: str) -> str:
     """
@@ -56,8 +56,6 @@ def convert_xml_to_csv(xml_string: str) -> str:
             acl_counter = 0
             for child in element:
                 child_tag = child.tag
-                # if element.attrib.get('type') == 'document' and element.attrib.get('action') == 'create':
-                #     print(f"DEBUG_CONVERTER: Complex node child: {child_tag} with attributes {child.attrib}")
 
                 for attr_name, attr_value in child.attrib.items():
                     if child_tag == 'category' and attr_name == 'name':
@@ -76,15 +74,11 @@ def convert_xml_to_csv(xml_string: str) -> str:
                         current_row_data[header] = attr_value
 
                 if child_tag == 'acl':
-                    pass
+                    pass # ACLs are ignored as per user instruction
                 elif child_tag == 'category':
                     category_name_attr = child.attrib.get('name', 'UnknownCategory')
                     sane_category_name = "".join(c if c.isalnum() else '_' for c in category_name_attr)
-
                     found_attributes = child.findall('attribute')
-                    # if element.attrib.get('type') == 'document' and element.attrib.get('action') == 'create': # DEBUG REMOVED
-                    #     print(f"DEBUG_CONVERTER_CATEGORY: Category '{sane_category_name}' found attributes: {[(attr.tag, attr.attrib, attr.text) for attr in found_attributes]}")
-
                     for cat_attribute_element in found_attributes:
                         attr_name_for_header = cat_attribute_element.attrib.get('name')
                         if attr_name_for_header:
@@ -96,12 +90,10 @@ def convert_xml_to_csv(xml_string: str) -> str:
                     for rm_attr_name, rm_attr_value in child.attrib.items():
                         header = f"rmclassification_{rm_attr_name}"
                         all_headers.add(header)
-                        # print(f"DEBUG_RM_ATTR_ADD: Added header '{header}'. all_headers size: {len(all_headers)}") # Removed more specific debug
                         current_row_data[header] = rm_attr_value
                     for rm_child in child:
                         header = f"rmclassification_{rm_child.tag}"
                         all_headers.add(header)
-                        # print(f"DEBUG_RM_CHILD_ADD: Added header '{header}'. all_headers size: {len(all_headers)}") # Removed more specific debug
                         if rm_child.text:
                             current_row_data[header] = rm_child.text.strip()
                 else:

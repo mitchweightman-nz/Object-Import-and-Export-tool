@@ -1,22 +1,7 @@
  <import>
-        <folder>
-                <node action="create" type="folder">
-                        <location>ENTERPRISE:TESTFOLDER</location>
-                        <title language="en_NZ">CPD-029931</title>
-                </node>
-        </folder>
-        <folder>
-                <node action="create" type="folder">
-                        <location>ENTERPRISE:TESTFOLDER</location>
-                        <title language="en_NZ">CPD-030870</title>
-                </node>
-        </folder>
-        <folder>
-                <node action="create" type="folder">
-                        <location>ENTERPRISE:TESTFOLDER</location>
-                        <title language="en_NZ">CPD-028947</title>
-                </node>
-        </folder>
+        <folder><node action="create" type="folder"><location>ENTERPRISE:TESTFOLDER</location><title language="en_NZ">CPD-029931</title></node></folder>
+        <folder><node action="create" type="folder"><location>ENTERPRISE:TESTFOLDER</location><title language="en_NZ">CPD-030870</title></node></folder>
+        <folder><node action="create" type="folder"><location>ENTERPRISE:TESTFOLDER</location><title language="en_NZ">CPD-028947</title></node></folder>
         <node action="create" rootPathID="01" type="document">
                 <acl group="Records Managers" permissions="1111111111"/>
                 <acl group="Location Specific" permissions="1100000000"/>
@@ -31,11 +16,11 @@
                 <createdby type="0"><![CDATA[USER01]]></createdby>
                 <description clear="true" language="en_NZ"/>
                 <externalcreatedate><![CDATA[20251318114430]]></externalcreatedate>
-                <externalidentity><![CDATA[WD\USER01]]></externalidentity>
+                <externalidentity><![CDATA[WD\\USER01]]></externalidentity>
                 <externalidentitytype><![CDATA[domain_userid]]></externalidentitytype>
                 <externalmodifydate><![CDATA[20251318114430]]></externalmodifydate>
                 <externalsource><![CDATA[file_system]]></externalsource>
-                <file><![CDATA[C:\Temp\0000002577]]></file>
+                <file><![CDATA[C:\\Temp\\0000002577]]></file>
                 <filename><![CDATA[Example PDF with version.pdf]]></filename>
                 <filetype><![CDATA[pdf]]></filetype>
                 <location><![CDATA[Enterprise:Test]]></location>
@@ -56,7 +41,7 @@
         <node action="addversion" type="document">
                 <created><![CDATA[20251325092756]]></created>
                 <createdby><![CDATA[USER01]]></createdby>
-                <file><![CDATA[C:\Temp\0000002578]]></file>
+                <file><![CDATA[C:\\Temp\\0000002578]]></file>
                 <filename><![CDATA[Example PDF with version.pdf]]></filename>
                 <location><![CDATA[Enterprise:Test:Example PDF with version]]></location>
                 <mime><![CDATA[application/pdf]]></mime>
