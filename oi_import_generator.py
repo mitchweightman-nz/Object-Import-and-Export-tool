@@ -400,26 +400,188 @@ def save_reprocessed_nodes(reprocess_data, output_path):
     except Exception as e: logging.exception(f"Failed to write reprocess XML to {output_path}"); return [], False
 
 # -------------------- XML to CSV Conversion Functionality --------------------
+
+class FieldSelectionDialog(simpledialog.Dialog):
+    def __init__(self, parent, title, available_fields_by_node):
+        self.available_fields_by_node = available_fields_by_node
+        self.result = None
+        self.checkbutton_vars = {} # Store {node_tag: {field_name: tk.BooleanVar}}
+        super().__init__(parent, title)
+
+    def body(self, master):
+        master.pack(fill="both", expand=True)
+        canvas = tk.Canvas(master, borderwidth=0)
+        scrollbar = ttk.Scrollbar(master, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        row_idx = 0
+        for node_tag, fields in sorted(self.available_fields_by_node.items()):
+            if not fields: continue # Skip node tags if no fields were found (e.g. self-closing tags)
+
+            self.checkbutton_vars[node_tag] = {}
+
+            node_frame = ttk.LabelFrame(scrollable_frame, text=f"Fields for <{node_tag}> elements", padding=(10,5))
+            node_frame.grid(row=row_idx, column=0, padx=10, pady=5, sticky="ew")
+            row_idx += 1
+
+            select_all_var = tk.BooleanVar(value=True)
+            select_all_cb = ttk.Checkbutton(node_frame, text="Select/Deselect All", variable=select_all_var,
+                                            command=lambda nt=node_tag, sv=select_all_var: self.toggle_all_for_node(nt, sv.get()))
+            select_all_cb.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0,5))
+
+            field_idx = 0
+            max_cols = 3 # Display fields in N columns
+            for field_name in sorted(list(fields)):
+                var = tk.BooleanVar(value=True)
+                self.checkbutton_vars[node_tag][field_name] = var
+                cb = ttk.Checkbutton(node_frame, text=field_name, variable=var)
+                cb.grid(row=1 + field_idx // max_cols, column=field_idx % max_cols, sticky="w", padx=5)
+                field_idx += 1
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        return None # focus_set is handled by simpledialog.Dialog
+
+    def toggle_all_for_node(self, node_tag, select_state):
+        if node_tag in self.checkbutton_vars:
+            for field_name, var in self.checkbutton_vars[node_tag].items():
+                var.set(select_state)
+
+    def apply(self):
+        self.result = {}
+        for node_tag, field_vars in self.checkbutton_vars.items():
+            self.result[node_tag] = [field_name for field_name, var in field_vars.items() if var.get()]
+        logging.info(f"Field selections made: {self.result}")
+
+def get_all_fields_from_xml_root(xml_root):
+    """
+    Parses an XML root to find all unique top-level element tags and their possible fields.
+    Fields include attributes and child tags (and their attributes, formatted).
+    """
+    available_fields_by_node = {}
+
+    for element in xml_root: # Iterate over top-level elements (like <folder>, <document>)
+        tag_name = element.tag
+        if tag_name not in available_fields_by_node:
+            available_fields_by_node[tag_name] = set()
+
+        # Always consider 'element_tag' as a potential field
+        available_fields_by_node[tag_name].add('element_tag')
+
+        # Handle simple folder wrapper structure specifically for field discovery
+        is_simple_folder_wrapper = False
+        if element.tag == 'folder':
+            folder_children = list(element)
+            if len(folder_children) == 1 and folder_children[0].tag == 'node':
+                is_simple_folder_wrapper = True
+                inner_node = folder_children[0]
+                for attr_name in inner_node.attrib:
+                    available_fields_by_node[tag_name].add(attr_name)
+                for folder_prop_child in inner_node:
+                    prop_child_tag_name = folder_prop_child.tag
+                    for prop_attr_name in folder_prop_child.attrib:
+                        available_fields_by_node[tag_name].add(f"{prop_child_tag_name}_{prop_attr_name}")
+                    if folder_prop_child.text and folder_prop_child.text.strip():
+                         available_fields_by_node[tag_name].add(prop_child_tag_name)
+
+        if not is_simple_folder_wrapper:
+            # Direct attributes of the element
+            for attr_name in element.attrib:
+                available_fields_by_node[tag_name].add(attr_name)
+
+            # Children of the element
+            for child in element:
+                child_tag_name = child.tag
+                # Attributes of children
+                for attr_name in child.attrib:
+                    if child_tag_name == 'category' and attr_name == 'name': continue
+                    if child_tag_name == 'rmclassification' and attr_name == 'name':
+                         available_fields_by_node[tag_name].add(f"rmclassification_{attr_name}")
+                         continue
+                    if child_tag_name == 'attribute' and attr_name == 'name': continue
+                    if child_tag_name == 'acl': continue
+                    available_fields_by_node[tag_name].add(f"{child_tag_name}_{attr_name}")
+
+                # Specific handling for complex children
+                if child_tag_name == 'category':
+                    category_name_attr = child.attrib.get('name', 'UnknownCategory')
+                    sane_category_name = "".join(c if c.isalnum() else '_' for c in category_name_attr)
+                    for cat_attr_elem in child.findall('attribute'):
+                        attr_name_for_header = cat_attr_elem.attrib.get('name')
+                        if attr_name_for_header:
+                            available_fields_by_node[tag_name].add(f"category_{sane_category_name}_{attr_name_for_header}")
+                elif child_tag_name == 'rmclassification':
+                    for rm_child in child: # Children of rmclassification
+                        available_fields_by_node[tag_name].add(f"rmclassification_{rm_child.tag}")
+                elif child.text and child.text.strip(): # Simple child with text
+                    available_fields_by_node[tag_name].add(child_tag_name)
+
+    return available_fields_by_node
+
+
 def perform_xml_to_csv_conversion(app_instance):
     if not convert_xml_to_csv:
         messagebox.showerror("Converter Error", "XML to CSV converter module is not available.")
         return
     xml_input_path = filedialog.askopenfilename(title="Select XML File to Convert", filetypes=[("XML files", "*.xml"), ("All files", "*.*")])
     if not xml_input_path: logging.info("XML to CSV conversion cancelled by user (no input file selected)."); return
-    csv_output_path = filedialog.asksaveasfilename(title="Save CSV Output As", defaultextension=".csv", filetypes=[("CSV files", "*.csv"), ("All files", "*.*")])
-    if not csv_output_path: logging.info("XML to CSV conversion cancelled by user (no output file selected)."); return
+
     try:
-        logging.info(f"Reading XML file: {xml_input_path}")
+        logging.info(f"Reading XML file for field discovery: {xml_input_path}")
         with open(xml_input_path, 'r', encoding='utf-8') as f_xml: xml_content = f_xml.read()
-        logging.info("Starting XML to CSV conversion...")
-        csv_content = convert_xml_to_csv(xml_content)
+
+        xml_root = ET.fromstring(xml_content)
+        available_fields = get_all_fields_from_xml_root(xml_root)
+
+        if not available_fields:
+            messagebox.showinfo("Info", "No processable elements found in the XML or XML is empty.")
+            return
+
+        dialog = FieldSelectionDialog(app_instance, "Select XML Fields to Convert", available_fields)
+        selected_fields_by_node = dialog.result # This will be None if cancelled, or a dict if OK
+
+        if selected_fields_by_node is None:
+            logging.info("XML to CSV conversion cancelled by user (field selection dialog).")
+            return
+
+        csv_output_path = filedialog.asksaveasfilename(title="Save CSV Output As", defaultextension=".csv", filetypes=[("CSV files", "*.csv"), ("All files", "*.*")])
+        if not csv_output_path: logging.info("XML to CSV conversion cancelled by user (no output file selected)."); return
+
+        logging.info("Starting XML to CSV conversion with selected fields...")
+        csv_content = convert_xml_to_csv(xml_content, selected_fields_by_node)
+
         if csv_content.startswith("Error:"):
             logging.error(f"Conversion failed: {csv_content}"); messagebox.showerror("Conversion Error", f"Could not convert XML to CSV:\n{csv_content}"); return
+
+        if not csv_content.strip() and selected_fields_by_node:
+             # Check if any fields were selected for any node. If selections were made but output is empty.
+            is_any_field_selected = any(fields for fields in selected_fields_by_node.values())
+            if is_any_field_selected:
+                messagebox.showinfo("Conversion Note", "CSV conversion resulted in empty output. This might be because the selected fields do not exist in the XML data or have no values.")
+            else: # No fields were selected at all
+                 messagebox.showinfo("Conversion Note", "CSV conversion resulted in empty output as no fields were selected for export.")
+
+
         logging.info(f"Saving CSV output to: {csv_output_path}")
         with open(csv_output_path, 'w', encoding='utf-8', newline='') as f_csv: f_csv.write(csv_content)
         logging.info("XML to CSV conversion successful."); messagebox.showinfo("Conversion Successful", f"XML file converted and saved to:\n{csv_output_path}")
-    except FileNotFoundError: logging.error(f"File not found: {xml_input_path}"); messagebox.showerror("File Error", f"Input XML file not found:\n{xml_input_path}")
-    except Exception as e: logging.exception("Error during XML to CSV conversion."); messagebox.showerror("Conversion Error", f"An unexpected error occurred:\n{str(e)}")
+
+    except ET.ParseError as e:
+        logging.error(f"Error parsing XML: {xml_input_path} - {e}")
+        messagebox.showerror("XML Parse Error", f"Could not parse the XML file. Please check its format.\nError: {e}")
+    except FileNotFoundError:
+        logging.error(f"File not found: {xml_input_path}")
+        messagebox.showerror("File Error", f"Input XML file not found:\n{xml_input_path}")
+    except Exception as e:
+        logging.exception("Error during XML to CSV conversion.")
+        messagebox.showerror("Conversion Error", f"An unexpected error occurred:\n{str(e)}")
 
 # -------------------- Tkinter Application (Updated Reprocess Logic) --------------------
 class Application(tk.Tk):
