@@ -526,16 +526,219 @@ def get_all_fields_from_xml_root(xml_root):
     return available_fields_by_node
 
 
+def run_sharepoint_processing(input_file):
+    """
+    This function orchestrates the multi-step processing for SharePoint CSV files.
+    """
+    logging.info("--- Starting SharePoint CSV Processing ---")
+
+    # --- Step 1: Convert location to a preliminary path ---
+    def step1_convert_paths(input_file, output_file='_temp_step1.csv'):
+        print(f"--- Starting Step 1: Converting Locations to Paths ---")
+        if not os.path.exists(input_file):
+            print(f"Error: The input file '{input_file}' was not found.")
+            return False
+        try:
+            processed_rows = []
+            with open(input_file, mode='r', encoding='utf-8-sig') as infile:
+                reader = csv.DictReader(infile)
+                fieldnames = reader.fieldnames + ['converted_location']
+                for row in reader:
+                    original_location = row.get('location', '')
+                    item_type = row.get('type', '')
+                    converted_path = original_location.replace(':', '\\')
+                    if item_type != 'folder':
+                        converted_path = os.path.dirname(converted_path)
+                    row['converted_location'] = converted_path
+                    processed_rows.append(row)
+            with open(output_file, mode='w', encoding='utf-8', newline='') as outfile:
+                writer = csv.DictWriter(outfile, fieldnames=fieldnames, extrasaction='ignore')
+                writer.writeheader()
+                writer.writerows(processed_rows)
+            print(f"✅ Success! Intermediate file '{output_file}' created.")
+            return True
+        except Exception as e:
+            print(f"\nAn error occurred during Step 1: {e}")
+            return False
+
+    # --- Step 2: Replace the path prefix ---
+    def step2_replace_prefix(input_file='_temp_step1.csv', output_file='_temp_step2.csv'):
+        print(f"--- Starting Step 2: Replacing Path Prefix ---")
+        if not os.path.exists(input_file): return False
+        try:
+            processed_rows = []
+            with open(input_file, mode='r', encoding='utf-8-sig') as infile:
+                reader = csv.DictReader(infile)
+                fieldnames = reader.fieldnames
+                for row in reader:
+                    path_to_process = row.get('converted_location', '')
+                    old_prefix = "Enterprise\\Governance and Strategy\\Managing Technology\\Capital Projects\\ECLI\\"
+                    new_prefix = "ECLICONTENT\\"
+                    if path_to_process.startswith(old_prefix):
+                        path_to_process = path_to_process.replace(old_prefix, new_prefix, 1)
+                    row['converted_location'] = path_to_process
+                    processed_rows.append(row)
+            with open(output_file, mode='w', encoding='utf-8', newline='') as outfile:
+                writer = csv.DictWriter(outfile, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(processed_rows)
+            print(f"✅ Success! Intermediate file '{output_file}' created.")
+            return True
+        except Exception as e:
+            print(f"\nAn error occurred during Step 2: {e}")
+            return False
+
+    # --- Step 3: Clean Name, Filename, Title, and last part of the path ---
+    def step3_clean_fields(input_file='_temp_step2.csv', output_file='_temp_step3.csv'):
+        print(f"--- Starting Step 3: Cleaning Name and Path Fields ---")
+        if not os.path.exists(input_file): return False
+        def clean_string(text):
+            if not isinstance(text, str): return ""
+            text = text.replace('\\', '').replace('/', '')
+            hyphen_like_chars = "–—―‐"
+            for char in hyphen_like_chars: text = text.replace(char, '-')
+            return text
+        try:
+            processed_rows = []
+            with open(input_file, mode='r', encoding='utf-8-sig') as infile:
+                reader = csv.DictReader(infile)
+                fieldnames = reader.fieldnames
+                for row in reader:
+                    row['filename'] = clean_string(row.get('filename', ''))
+                    row['title'] = clean_string(row.get('title', ''))
+                    location_path = row.get('converted_location', '')
+                    if location_path:
+                        head, tail = os.path.split(location_path)
+                        cleaned_tail = clean_string(tail)
+                        row['converted_location'] = os.path.join(head, cleaned_tail)
+                    processed_rows.append(row)
+            with open(output_file, mode='w', encoding='utf-8', newline='') as outfile:
+                writer = csv.DictWriter(outfile, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(processed_rows)
+            print(f"✅ Success! Intermediate file '{output_file}' created.")
+            return True
+        except Exception as e:
+            print(f"\nAn error occurred during Step 3: {e}")
+            return False
+
+    # --- Step 4: Copy Parent Title to Versions ---
+    def step4_copy_parent_title(input_file='_temp_step3.csv', output_file='_temp_step4.csv'):
+        print(f"--- Starting Step 4: Copying Parent Title to Versions ---")
+        if not os.path.exists(input_file): return False
+        try:
+            all_rows = []
+            with open(input_file, mode='r', encoding='utf-8-sig') as infile:
+                reader = csv.DictReader(infile)
+                fieldnames = reader.fieldnames
+                for row in reader:
+                    all_rows.append(row)
+
+            document_groups = []
+            folders_and_unmatched = []
+            for row in all_rows:
+                if row.get('type') == 'folder':
+                    folders_and_unmatched.append(row)
+                else:
+                    if row.get('action') == 'create':
+                        document_groups.append([row])
+                    elif row.get('action') == 'addversion' and document_groups:
+                        document_groups[-1].append(row)
+                    else:
+                        folders_and_unmatched.append(row)
+
+            processed_rows = folders_and_unmatched
+            for group in document_groups:
+                parent_title = group[0].get('title', '')
+                for row in group:
+                    row['title'] = parent_title
+                processed_rows.extend(group)
+
+            with open(output_file, mode='w', encoding='utf-8', newline='') as outfile:
+                writer = csv.DictWriter(outfile, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(processed_rows)
+            print(f"✅ Success! Intermediate file '{output_file}' created.")
+            return True
+        except Exception as e:
+            print(f"\nAn error occurred during Step 4: {e}")
+            return False
+
+    # --- Step 5: Replace File Path ---
+    def step5_replace_file_path(input_file='_temp_step4.csv', output_file='_temp_step5.csv'):
+        print(f"--- Starting Step 5: Replacing M: Drive Path ---")
+        if not os.path.exists(input_file): return False
+        try:
+            processed_rows = []
+            with open(input_file, mode='r', encoding='utf-8-sig') as infile:
+                reader = csv.DictReader(infile)
+                fieldnames = reader.fieldnames
+                for row in reader:
+                    file_path = row.get('file', '')
+                    if file_path:
+                        old_prefix = "M:\\ECLI\\ECLI_ALL_20250716035101\\"
+                        new_prefix = "C:\\Tmpe\\ECLI\\"
+                        row['file'] = file_path.replace(old_prefix, new_prefix)
+                    processed_rows.append(row)
+            with open(output_file, mode='w', encoding='utf-8', newline='') as outfile:
+                writer = csv.DictWriter(outfile, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(processed_rows)
+            print(f"✅ Success! Intermediate file '{output_file}' created.")
+            return True
+        except Exception as e:
+            print(f"\nAn error occurred during Step 5: {e}")
+            return False
+
+    # Run the steps in sequence
+    temp_files = []
+    try:
+        if step1_convert_paths(input_file, '_temp_step1.csv'):
+            temp_files.append('_temp_step1.csv')
+            if step2_replace_prefix('_temp_step1.csv', '_temp_step2.csv'):
+                temp_files.append('_temp_step2.csv')
+                if step3_clean_fields('_temp_step2.csv', '_temp_step3.csv'):
+                    temp_files.append('_temp_step3.csv')
+                    if step4_copy_parent_title('_temp_step3.csv', '_temp_step4.csv'):
+                        temp_files.append('_temp_step4.csv')
+                        if step5_replace_file_path('_temp_step4.csv', input_file): # Overwrite the original file
+                            logging.info("SharePoint processing completed successfully.")
+                        else:
+                            logging.error("SharePoint processing failed at Step 5.")
+                    else:
+                        logging.error("SharePoint processing failed at Step 4.")
+                else:
+                    logging.error("SharePoint processing failed at Step 3.")
+            else:
+                logging.error("SharePoint processing failed at Step 2.")
+        else:
+            logging.error("SharePoint processing failed at Step 1.")
+    finally:
+        # Clean up temporary files
+        for f in temp_files:
+            try:
+                os.remove(f)
+                logging.info(f"Removed temporary file: {f}")
+            except OSError as e:
+                logging.error(f"Error removing temporary file {f}: {e}")
+
 def perform_xml_to_csv_conversion(app_instance):
     if not convert_xml_to_csv:
         messagebox.showerror("Converter Error", "XML to CSV converter module is not available.")
         return
+
     xml_input_path = filedialog.askopenfilename(title="Select XML File to Convert", filetypes=[("XML files", "*.xml"), ("All files", "*.*")])
-    if not xml_input_path: logging.info("XML to CSV conversion cancelled by user (no input file selected)."); return
+    if not xml_input_path:
+        logging.info("XML to CSV conversion cancelled by user (no input file selected).")
+        return
+
+    # Ask the user if this is for a SharePoint Import
+    is_sharepoint_import = messagebox.askyesno("SharePoint Import", "Is this for a SharePoint Import?")
 
     try:
-        logging.info(f"Reading XML file for field discovery: {xml_input_path}")
-        with open(xml_input_path, 'r', encoding='utf-8') as f_xml: xml_content = f_xml.read()
+        logging.info(f"Reading XML file for conversion: {xml_input_path}")
+        with open(xml_input_path, 'r', encoding='utf-8') as f_xml:
+            xml_content = f_xml.read()
 
         xml_root = ET.fromstring(xml_content)
         available_fields = get_all_fields_from_xml_root(xml_root)
@@ -544,34 +747,61 @@ def perform_xml_to_csv_conversion(app_instance):
             messagebox.showinfo("Info", "No processable elements found in the XML or XML is empty.")
             return
 
-        dialog = FieldSelectionDialog(app_instance, "Select XML Fields to Convert", available_fields)
-        selected_fields_by_node = dialog.result # This will be None if cancelled, or a dict if OK
-
-        if selected_fields_by_node is None:
-            logging.info("XML to CSV conversion cancelled by user (field selection dialog).")
-            return
+        selected_fields_by_node = None
+        if is_sharepoint_import:
+            # Automatically select the required fields for SharePoint import
+            sharepoint_fields = ["action", "created", "createdby", "description", "file", "filename", "location", "modified", "title"]
+            selected_fields_by_node = {}
+            for node_tag in available_fields:
+                selected_fields_by_node[node_tag] = [field for field in sharepoint_fields if field in available_fields[node_tag]]
+            logging.info("SharePoint import selected. Automatically selecting fields.")
+        else:
+            # Show the field selection dialog for other conversions
+            dialog = FieldSelectionDialog(app_instance, "Select XML Fields to Convert", available_fields)
+            selected_fields_by_node = dialog.result
+            if selected_fields_by_node is None:
+                logging.info("XML to CSV conversion cancelled by user (field selection dialog).")
+                return
 
         csv_output_path = filedialog.asksaveasfilename(title="Save CSV Output As", defaultextension=".csv", filetypes=[("CSV files", "*.csv"), ("All files", "*.*")])
-        if not csv_output_path: logging.info("XML to CSV conversion cancelled by user (no output file selected)."); return
+        if not csv_output_path:
+            logging.info("XML to CSV conversion cancelled by user (no output file selected).")
+            return
 
         logging.info("Starting XML to CSV conversion with selected fields...")
         csv_content = convert_xml_to_csv(xml_content, selected_fields_by_node)
 
         if csv_content.startswith("Error:"):
-            logging.error(f"Conversion failed: {csv_content}"); messagebox.showerror("Conversion Error", f"Could not convert XML to CSV:\n{csv_content}"); return
+            logging.error(f"Conversion failed: {csv_content}")
+            messagebox.showerror("Conversion Error", f"Could not convert XML to CSV:\n{csv_content}")
+            return
 
         if not csv_content.strip() and selected_fields_by_node:
-             # Check if any fields were selected for any node. If selections were made but output is empty.
             is_any_field_selected = any(fields for fields in selected_fields_by_node.values())
             if is_any_field_selected:
                 messagebox.showinfo("Conversion Note", "CSV conversion resulted in empty output. This might be because the selected fields do not exist in the XML data or have no values.")
-            else: # No fields were selected at all
-                 messagebox.showinfo("Conversion Note", "CSV conversion resulted in empty output as no fields were selected for export.")
+            else:
+                messagebox.showinfo("Conversion Note", "CSV conversion resulted in empty output as no fields were selected for export.")
 
+        if is_sharepoint_import:
+            # Process the CSV content for SharePoint
+            logging.info("Processing CSV for SharePoint import...")
+            # Here we need to save the intermediate CSV, process it, and then save the final version.
+            # This is a bit tricky as the SharePoint processing functions work with files.
+            # Let's save the initial CSV and then process it.
+            with open(csv_output_path, 'w', encoding='utf-8', newline='') as f_csv:
+                f_csv.write(csv_content)
 
-        logging.info(f"Saving CSV output to: {csv_output_path}")
-        with open(csv_output_path, 'w', encoding='utf-8', newline='') as f_csv: f_csv.write(csv_content)
-        logging.info("XML to CSV conversion successful."); messagebox.showinfo("Conversion Successful", f"XML file converted and saved to:\n{csv_output_path}")
+            # Now, run the SharePoint processing steps
+            run_sharepoint_processing(csv_output_path)
+
+        else:
+            logging.info(f"Saving CSV output to: {csv_output_path}")
+            with open(csv_output_path, 'w', encoding='utf-8', newline='') as f_csv:
+                f_csv.write(csv_content)
+
+        logging.info("XML to CSV conversion successful.")
+        messagebox.showinfo("Conversion Successful", f"XML file converted and saved to:\n{csv_output_path}")
 
     except ET.ParseError as e:
         logging.error(f"Error parsing XML: {xml_input_path} - {e}")
