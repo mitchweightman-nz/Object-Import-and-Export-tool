@@ -101,6 +101,15 @@ RECOGNISED_STANDARD = {"nodetype", "title", "description", "location", "created"
 MIME_MAP = {"dwg": "application/x-acad", "arj": "application/x-arj-compressed", "tgz": "application/x-compressed", "cpio": "application/x-cpio", "csh": "application/x-csh", "dvi": "application/x-dvi", "emf": "application/x-emf", "exe": "application/x-exe", "gtar": "application/x-gtar", "gz": "application/x-gzip", "zip": "application/x-zip-compressed", "hdf": "application/x-hdf", "js": "application/x-javascript", "latex": "application/x-latex", "mif": "application/x-mif", "nc": "application/x-netcdf", "cdf": "application/x-netcdf", "msg": "application/x-outlook-msg", "pdf": "application/x-pdf", "xls": "application/x-msexcel", "ppt": "application/x-mspowerpoint", "rar": "application/x-rar-compressed", "sh": "application/x-sh", "tar": "application/x-tar", "tcl": "application/x-tcl", "tex": "application/x-tex", "texinfo": "application/x-texinfo", "tif": "image/x-tiff", "tiff": "image/x-tiff", "png": "application/x-png", "bmp": "application/x-bmp", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif", "avi": "video/x-msvideo", "mov": "video/x-sgi-movie", "flv": "video/x-flv", "mp3": "audio/x-mpeg", "wav": "audio/x-wav", "doc": "application/msword", "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation"}
 global_docnum_counter = 100000
 DEFAULT_SPECIAL_CHAR_MAP = {"&": "and", "’": "'", "“": '"', "”": '"'}
+DEFAULT_CLEANSING_OPTIONS = {
+    "normalize_paths": True,
+    "path_colon_replacement": "",
+    "clean_title_colons": True,
+    "title_colon_replacement": "",
+    "clean_location_colons": True,
+    "location_colon_replacement": "",
+    "apply_special_map": True,
+}
 
 # -------------------- Core Processing Logic (process_row etc.) --------------------
 # ... (simplify_category, apply_special_char_replacements, wrap_cdata, generate_default_mapping, normalize_mapping, add_standard_elements remain as original)
@@ -108,10 +117,24 @@ def simplify_category(full_category):
     parts = full_category.split(":")
     return parts[-1].strip() if len(parts) > 1 else full_category.strip()
 
-def apply_special_char_replacements(text, special_map):
-    if not isinstance(text, str): return text
-    for char, repl in special_map.items(): text = text.replace(char, repl)
-    return text
+def apply_special_char_replacements(text, special_map, log_callback=None, field_name=None,
+                                    stage="output", row_index=None):
+    if not isinstance(text, str):
+        return text
+    cleaned_text = text
+    for char, repl in special_map.items():
+        cleaned_text = cleaned_text.replace(char, repl)
+    if log_callback and cleaned_text != text:
+        log_callback(stage, field_name or "value", text, cleaned_text, row_index,
+                     "Applied special character replacements")
+    return cleaned_text
+
+
+def maybe_apply_special_chars(text, special_map, cleansing_options, log_callback=None,
+                              field_name=None, stage="output", row_index=None):
+    if not cleansing_options.get("apply_special_map", True):
+        return text
+    return apply_special_char_replacements(text, special_map, log_callback, field_name, stage, row_index)
 
 def wrap_cdata(text):
     if "<![CDATA[" in text: return text
@@ -134,26 +157,35 @@ def normalize_mapping(mapping):
         norm[norm_key] = norm_value
     return norm
 
-def add_standard_elements(node, std, special_map):
+def add_standard_elements(node, std, special_map, cleansing_options, cleansing_callback=None, row_index=None):
     primary_order = ["location", "title", "description", "created", "createby", "version", "file", "mimetype", "docnum", "createdby"]
     added_keys = set()
     for key in primary_order:
         if key in std:
-            val = apply_special_char_replacements(std[key], special_map)
+            val = maybe_apply_special_chars(std[key], special_map, cleansing_options, cleansing_callback, key, "output", row_index)
             if key.lower() == "createdby": ET.SubElement(node, key, attrib={"type": "0"}).text = val
             else: ET.SubElement(node, key).text = val
             added_keys.add(key)
     extra_keys = sorted(k for k in std if k not in added_keys and k.lower() not in ("action", "nodetype"))
     for key in extra_keys:
-        val = apply_special_char_replacements(std[key], special_map)
+        val = maybe_apply_special_chars(std[key], special_map, cleansing_options, cleansing_callback, key, "output", row_index)
         ET.SubElement(node, key).text = val
 
 def process_row(row_index, csv_data, mapping, default_location, username, selected_action,
                 default_node_type, category_default, use_csv_createdby, report_dict,
-                rename_list, special_map):
+                rename_list, special_map, cleansing_options=None, cleansing_callback=None):
     global global_docnum_counter
+    if cleansing_options is None:
+        cleansing_options = dict(DEFAULT_CLEANSING_OPTIONS)
+    else:
+        merged_options = dict(DEFAULT_CLEANSING_OPTIONS)
+        merged_options.update(cleansing_options)
+        cleansing_options = merged_options
     std = {}
     meta_by_cat = {}
+    def log_cleaning(stage, field, original, cleaned, note):
+        if cleansing_callback and original != cleaned:
+            cleansing_callback(stage, field, original, cleaned, row_index, note)
     try:
         for col_csv, mapinfo in mapping.items():
             original_col_key = next((k for k in csv_data if k.strip().lower() == col_csv), None)
@@ -179,12 +211,13 @@ def process_row(row_index, csv_data, mapping, default_location, username, select
         if default_node_type.lower() != "none": std["nodetype"] = default_node_type
 
         original_file = std.get("file") or std.get("filepath")
-        if original_file:
+        if original_file and cleansing_options.get("normalize_paths", True):
             try:
                 standardized_path = original_file.replace('\\', '/')
                 normalized_path = os.path.normpath(standardized_path)
                 dir_name, base_name = os.path.split(normalized_path)
-                new_base = base_name.replace(":", "")
+                colon_replacement = cleansing_options.get("path_colon_replacement", "")
+                new_base = base_name.replace(":", colon_replacement)
 
                 if not dir_name or dir_name == '.':
                     xml_path_representation = new_base
@@ -194,6 +227,8 @@ def process_row(row_index, csv_data, mapping, default_location, username, select
 
                 if xml_path_representation != standardized_path:
                     rename_list.append((original_file, xml_path_representation))
+                    log_cleaning("input", "file path", original_file, xml_path_representation,
+                                 "Normalized file path for XML compatibility")
 
                 if "file" in std: std["file"] = xml_path_representation
                 elif "filepath" in std: std["filepath"] = xml_path_representation
@@ -203,6 +238,16 @@ def process_row(row_index, csv_data, mapping, default_location, username, select
                 if mime_type: std["mimetype"] = mime_type
                 elif std.get("nodetype", "").lower() == "document": std["mimetype"] = "application/octet-stream"
             except Exception as e: logging.warning(f"Row {row_index}: Error processing file path '{original_file}': {e}")
+        elif original_file:
+            try:
+                xml_path_representation = original_file.replace('\\', '/')
+                if "file" in std: std["file"] = xml_path_representation
+                elif "filepath" in std: std["filepath"] = xml_path_representation
+                ext_field = os.path.splitext(os.path.basename(xml_path_representation))[1].lower()
+                mime_type = MIME_MAP.get(ext_field.lstrip("."), "")
+                if mime_type: std["mimetype"] = mime_type
+            except Exception as e:
+                logging.warning(f"Row {row_index}: Error preserving file path '{original_file}': {e}")
 
         action_lower = std.get("action", "").lower()
         if action_lower == "update (metadata)":
@@ -218,15 +263,23 @@ def process_row(row_index, csv_data, mapping, default_location, username, select
             if csv_version_val.isdigit() and int(csv_version_val) > 1: std["version"] = csv_version_val; std["action"] = "addversion"; action_lower = "addversion"
 
         if node_type_lower == "document" and "docnum" not in std and action_lower not in ("delete", "update"): global_docnum_counter += 1; std["docnum"] = str(global_docnum_counter)
-        if "title" in std: std["title"] = std["title"].replace(":", "")
+        if "title" in std and cleansing_options.get("clean_title_colons", True):
+            replacement_val = cleansing_options.get("title_colon_replacement", "")
+            cleaned_title = std["title"].replace(":", replacement_val)
+            log_cleaning("input", "title", std["title"], cleaned_title, "Removed colons from title")
+            std["title"] = cleaned_title
 
-        if "location" in std and ":" in std["location"]:
+        if "location" in std and ":" in std["location"] and cleansing_options.get("clean_location_colons", True):
             try:
                 parts = std["location"].split(':')
                 if len(parts) > 1:
-                    loc_tail_cleaned = parts[-1].replace(":", "")
+                    replacement_val = cleansing_options.get("location_colon_replacement", "")
+                    loc_tail_cleaned = parts[-1].replace(":", replacement_val)
                     prefix_loc = ":".join(parts[:-1])
-                    std["location"] = f"{prefix_loc}:{loc_tail_cleaned}"
+                    cleaned_location = f"{prefix_loc}:{loc_tail_cleaned}"
+                    log_cleaning("input", "location", std["location"], cleaned_location,
+                                 "Trimmed trailing colon characters from location")
+                    std["location"] = cleaned_location
             except Exception: pass
 
         node_attribs = {"type": node_type_lower, "action": action_lower}
@@ -234,18 +287,25 @@ def process_row(row_index, csv_data, mapping, default_location, username, select
 
         if action_lower in ("addversion", "delete"):
             # ... (original logic for addversion/delete) ...
-            if "location" in std: loc_val = apply_special_char_replacements(std["location"], special_map); ET.SubElement(node, "location", attrib={"type": "0"}).text = loc_val
+            if "location" in std:
+                loc_val = maybe_apply_special_chars(std["location"], special_map, cleansing_options, cleansing_callback, "location", "output", row_index)
+                ET.SubElement(node, "location", attrib={"type": "0"}).text = loc_val
             if action_lower == "addversion":
                 file_val = std.get("file") or std.get("filepath")
-                if file_val: ET.SubElement(node, "file", attrib={"type": "0"}).text = apply_special_char_replacements(file_val, special_map)
+                if file_val:
+                    file_clean = maybe_apply_special_chars(file_val, special_map, cleansing_options, cleansing_callback, "file", "output", row_index)
+                    ET.SubElement(node, "file", attrib={"type": "0"}).text = file_clean
                 if "version" in std: ET.SubElement(node, "version").text = std["version"]
         else:
             if node_type_lower == "document" and "mimetype" not in std: std["mimetype"] = "application/octet-stream"
-            add_standard_elements(node, std, special_map)
+            add_standard_elements(node, std, special_map, cleansing_options, cleansing_callback, row_index)
             for cat_name, meta_fields in meta_by_cat.items():
                 try:
                     cat_elem = ET.SubElement(node, "category", attrib={"name": cat_name})
-                    for k, v in meta_fields.items(): attr_name = apply_special_char_replacements(k, special_map); attr_val = apply_special_char_replacements(v, special_map); ET.SubElement(cat_elem, "attribute", attrib={"name": attr_name}).text = attr_val
+                    for k, v in meta_fields.items():
+                        attr_name = maybe_apply_special_chars(k, special_map, cleansing_options, cleansing_callback, f"{cat_name} attribute name", "output", row_index)
+                        attr_val = maybe_apply_special_chars(v, special_map, cleansing_options, cleansing_callback, f"{cat_name} attribute value", "output", row_index)
+                        ET.SubElement(cat_elem, "attribute", attrib={"name": attr_name}).text = attr_val
                 except Exception as e: logging.error(f"Row {row_index}: Failed to add metadata category '{cat_name}': {e}")
         logging.debug(f"Row {row_index}: Successfully generated node element.")
         return node, None
@@ -305,7 +365,7 @@ def run_processing(csv_file, xml_base, default_location, category, username,
                    mapping, action, node_type, batch_size, use_csv_createdby,
                    report_file, use_report_for_file,
                    csv_delimiter, csv_quotechar, cdata_fields, stop_flag_func=None,
-                   force_reprocess=False):
+                   force_reprocess=False, cleansing_callback=None, cleansing_options=None):
     logging.info("--- Starting Processing Run (DB Integrated) ---")
     logging.info(f"Force Reprocess Successful Items: {force_reprocess}")
     objects_for_db = []; original_fieldnames = []
@@ -348,7 +408,7 @@ def run_processing(csv_file, xml_base, default_location, category, username,
         elif status_val == 'processing': logging.warning(f"Object {unique_id} (Row {row_num}) has status 'processing'. Attempting to re-process.")
         elif status_val == 'unknown': logging.error(f"Object {unique_id} (Row {row_num}) not found in DB after initial add. Skipping."); skipped_count += 1; continue
         db_handler.update_object_status(unique_id, 'processing'); logging.debug(f"Processing object {unique_id} (Row {row_num})...")
-        node_elem, error_msg = process_row(row_index=row_num, csv_data=csv_data, mapping=mapping, default_location=default_location, username=username, selected_action=action, default_node_type=node_type, category_default=category, use_csv_createdby=use_csv_createdby, report_dict=report_dict, rename_list=rename_list, special_map=DEFAULT_SPECIAL_CHAR_MAP)
+        node_elem, error_msg = process_row(row_index=row_num, csv_data=csv_data, mapping=mapping, default_location=default_location, username=username, selected_action=action, default_node_type=node_type, category_default=category, use_csv_createdby=use_csv_createdby, report_dict=report_dict, rename_list=rename_list, special_map=DEFAULT_SPECIAL_CHAR_MAP, cleansing_options=cleansing_options or {}, cleansing_callback=cleansing_callback)
         if node_elem is not None:
             processed_count += 1; node_type_res = node_elem.attrib.get("type", "unknown"); action_res = node_elem.attrib.get("action", "unknown")
             identifier_res = node_elem.findtext("title", default="").strip() or node_elem.findtext("location", default="").strip() or f"Row_{row_num}_Object"
@@ -603,9 +663,18 @@ class Application(tk.Tk):
         self.cdata_fields = tk.StringVar(value="*")
         self.categories = ["Content Server Categories:Pītau Categories:Pītau documents", "Content Server Categories:Alternate Category:Alternate Documents"]
         self.special_char_map = dict(DEFAULT_SPECIAL_CHAR_MAP)
+        self.enable_path_normalization = tk.BooleanVar(value=True)
+        self.path_colon_replacement = tk.StringVar(value="")
+        self.enable_title_colon_clean = tk.BooleanVar(value=True)
+        self.title_colon_replacement = tk.StringVar(value="")
+        self.enable_location_colon_clean = tk.BooleanVar(value=True)
+        self.location_colon_replacement = tk.StringVar(value="")
+        self.enable_special_char_clean = tk.BooleanVar(value=True)
         self._stop_requested = False; self._processing_thread = None
         self.current_project_path = None; self.db_available = False
         self.force_reprocess_var = tk.BooleanVar(value=False); self.mapping_dirty = tk.BooleanVar(value=False)
+        self.cleansing_events = []
+        self.cleansing_queue = queue.Queue()
         
         self.notebook = ttk.Notebook(self)
         self.log_frame = ttk.Frame(self.notebook)
@@ -661,6 +730,14 @@ class Application(tk.Tk):
         self.csv_delimiter.set(config.get("csv_delimiter", self.csv_delimiter.get()))
         self.csv_quotechar.set(config.get("csv_quotechar", self.csv_quotechar.get()))
         self.cdata_fields.set(config.get("cdata_fields", self.cdata_fields.get()))
+        cleansing_cfg = config.get("cleansing_options", {})
+        self.enable_path_normalization.set(cleansing_cfg.get("normalize_paths", self.enable_path_normalization.get()))
+        self.path_colon_replacement.set(cleansing_cfg.get("path_colon_replacement", self.path_colon_replacement.get()))
+        self.enable_title_colon_clean.set(cleansing_cfg.get("clean_title_colons", self.enable_title_colon_clean.get()))
+        self.title_colon_replacement.set(cleansing_cfg.get("title_colon_replacement", self.title_colon_replacement.get()))
+        self.enable_location_colon_clean.set(cleansing_cfg.get("clean_location_colons", self.enable_location_colon_clean.get()))
+        self.location_colon_replacement.set(cleansing_cfg.get("location_colon_replacement", self.location_colon_replacement.get()))
+        self.enable_special_char_clean.set(cleansing_cfg.get("apply_special_map", self.enable_special_char_clean.get()))
         if "csv_mapping" in config:
             self.mapping = normalize_mapping(config["csv_mapping"])
             logging.info(f"Loaded {len(self.mapping)} CSV mapping rules from config.")
@@ -675,9 +752,21 @@ class Application(tk.Tk):
             "use_csv_createdby": self.use_csv_createdby.get(), "use_report_for_file": self.use_report_for_file.get(),
             "csv_delimiter": self.csv_delimiter.get(), "csv_quotechar": self.csv_quotechar.get(),
             "cdata_fields": self.cdata_fields.get(), "special_char_map": self.special_char_map,
-            "categories": self.categories, "csv_mapping": self.mapping
+            "categories": self.categories, "csv_mapping": self.mapping,
+            "cleansing_options": self.get_cleansing_options()
         }
         return config
+
+    def get_cleansing_options(self):
+        return {
+            "normalize_paths": self.enable_path_normalization.get(),
+            "path_colon_replacement": self.path_colon_replacement.get(),
+            "clean_title_colons": self.enable_title_colon_clean.get(),
+            "title_colon_replacement": self.title_colon_replacement.get(),
+            "clean_location_colons": self.enable_location_colon_clean.get(),
+            "location_colon_replacement": self.location_colon_replacement.get(),
+            "apply_special_map": self.enable_special_char_clean.get(),
+        }
 
     # ... (create_widgets and all tab creation methods as original) ...
     def create_widgets(self):
@@ -687,7 +776,9 @@ class Application(tk.Tk):
         self.categories_frame = ttk.Frame(self.notebook); self.notebook.add(self.categories_frame, text="Categories"); self.create_categories_tab(self.categories_frame)
         self.special_frame = ttk.Frame(self.notebook); self.notebook.add(self.special_frame, text="Special Mapping"); self.create_special_mapping_tab(self.special_frame)
         self.reprocess_frame = ttk.Frame(self.notebook); self.notebook.add(self.reprocess_frame, text="Reprocess"); self.create_reprocess_tab(self.reprocess_frame)
+        self.cleansing_frame = ttk.Frame(self.notebook); self.notebook.add(self.cleansing_frame, text="Data Cleansing"); self.create_cleansing_tab(self.cleansing_frame)
         self.notebook.add(self.log_frame, text="Log Output")
+        self.after(200, self.flush_cleansing_queue)
     def create_settings_tab(self, frame):
         frame.columnconfigure(0, weight=1)
         essential_frame = ttk.LabelFrame(frame, text="Essential Project Setup", padding=(10, 5)); essential_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=(5, 7)); essential_frame.columnconfigure(1, weight=1)
@@ -789,6 +880,99 @@ class Application(tk.Tk):
         top_frame = ttk.Frame(frame, padding=(10, 5)); top_frame.pack(fill="x"); ttk.Button(top_frame, text="Add New Row", command=self.add_special_mapping_row).pack(side="left", padx=5); ttk.Button(top_frame, text="Apply && Save Special Mapping", command=self.save_special_mapping_tab).pack(side="left", padx=5); ttk.Button(top_frame, text="Remove Selected Rows", command=self.remove_special_mapping_rows).pack(side="right", padx=5)
         columns = ("char", "replacement"); self.special_tree = ttk.Treeview(frame, columns=columns, show="headings", selectmode="extended"); self.special_tree.heading("char", text="Special Character"); self.special_tree.heading("replacement", text="Replacement Text"); self.special_tree.column("char", width=150, anchor="center"); self.special_tree.column("replacement", width=250, anchor="w")
         tree_scroll = ttk.Scrollbar(frame, orient="vertical", command=self.special_tree.yview); self.special_tree.configure(yscrollcommand=tree_scroll.set); tree_scroll.pack(side="right", fill="y", padx=(0,10), pady=(0,10)); self.special_tree.pack(fill="both", expand=True, padx=(10,0), pady=(0,10)); self.special_tree.bind("<Double-1>", self.on_special_tree_double_click); self.populate_special_mapping_tab()
+    def create_cleansing_tab(self, frame):
+        top_frame = ttk.Frame(frame, padding=(10, 5)); top_frame.pack(fill="x")
+        ttk.Label(top_frame, text="Choose what cleansing to apply; every change still logs below when enabled.").pack(side="left")
+        ttk.Button(top_frame, text="Clear Cleansing Entries", command=self.clear_cleansing_log).pack(side="right")
+
+        options_frame = ttk.LabelFrame(frame, text="Cleansing Controls", padding=(10, 5))
+        options_frame.pack(fill="x", padx=10, pady=(0, 10))
+
+        ttk.Checkbutton(options_frame, text="Normalize file paths (slashes + colon replacement)", variable=self.enable_path_normalization).grid(row=0, column=0, sticky="w")
+        ttk.Label(options_frame, text="Colon replacement (file name):").grid(row=0, column=1, sticky="e", padx=(10,2))
+        ttk.Entry(options_frame, textvariable=self.path_colon_replacement, width=10).grid(row=0, column=2, sticky="w")
+
+        ttk.Checkbutton(options_frame, text="Clean title colons", variable=self.enable_title_colon_clean).grid(row=1, column=0, sticky="w", pady=2)
+        ttk.Label(options_frame, text="Title colon replacement:").grid(row=1, column=1, sticky="e", padx=(10,2))
+        ttk.Entry(options_frame, textvariable=self.title_colon_replacement, width=10).grid(row=1, column=2, sticky="w")
+
+        ttk.Checkbutton(options_frame, text="Clean trailing location colons", variable=self.enable_location_colon_clean).grid(row=2, column=0, sticky="w", pady=2)
+        ttk.Label(options_frame, text="Location colon replacement:").grid(row=2, column=1, sticky="e", padx=(10,2))
+        ttk.Entry(options_frame, textvariable=self.location_colon_replacement, width=10).grid(row=2, column=2, sticky="w")
+
+        ttk.Checkbutton(options_frame, text="Apply special character map", variable=self.enable_special_char_clean).grid(row=3, column=0, sticky="w", pady=2)
+        ttk.Button(options_frame, text="Edit map...", command=lambda: self.notebook.select(self.special_frame)).grid(row=3, column=1, sticky="e", padx=(10,2))
+        ttk.Label(options_frame, text="(Uses rows in Special Mapping tab)").grid(row=3, column=2, sticky="w")
+
+        for i in range(3):
+            options_frame.columnconfigure(i, weight=1)
+
+        columns = ("timestamp", "stage", "row", "field", "original", "cleaned", "details")
+        self.cleansing_tree = ttk.Treeview(frame, columns=columns, show="headings", selectmode="extended")
+        headings = {
+            "timestamp": "Time",
+            "stage": "Stage",
+            "row": "Row",
+            "field": "Field",
+            "original": "Original",
+            "cleaned": "Cleaned",
+            "details": "Details",
+        }
+        widths = {"timestamp": 90, "stage": 80, "row": 60, "field": 140, "original": 220, "cleaned": 220, "details": 240}
+        for col in columns:
+            self.cleansing_tree.heading(col, text=headings[col])
+            self.cleansing_tree.column(col, width=widths.get(col, 120), anchor="w", stretch=(col in {"original", "cleaned", "details"}))
+
+        tree_scroll_y = ttk.Scrollbar(frame, orient="vertical", command=self.cleansing_tree.yview)
+        tree_scroll_x = ttk.Scrollbar(frame, orient="horizontal", command=self.cleansing_tree.xview)
+        self.cleansing_tree.configure(yscrollcommand=tree_scroll_y.set, xscrollcommand=tree_scroll_x.set)
+        tree_scroll_y.pack(side="right", fill="y", padx=(0,10), pady=(0,10))
+        tree_scroll_x.pack(side="bottom", fill="x", padx=(10,10), pady=(0,10))
+        self.cleansing_tree.pack(fill="both", expand=True, padx=(10,0), pady=(0,10))
+
+    def clear_cleansing_log(self):
+        self.cleansing_events.clear()
+        while not self.cleansing_queue.empty():
+            try:
+                self.cleansing_queue.get_nowait()
+            except queue.Empty:
+                break
+        if hasattr(self, "cleansing_tree"):
+            for item_id in self.cleansing_tree.get_children():
+                self.cleansing_tree.delete(item_id)
+
+    def record_cleansing_action(self, stage, field, original, cleaned, row_index=None, details=""):
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        log_message = f"[Cleansing-{stage}] Row {row_index if row_index is not None else '-'} {field}: '{original}' -> '{cleaned}'"
+        if details:
+            log_message += f" ({details})"
+        logging.info(log_message)
+        event = {
+            "timestamp": timestamp,
+            "stage": stage.capitalize(),
+            "row": row_index if row_index is not None else "-",
+            "field": field,
+            "original": original,
+            "cleaned": cleaned,
+            "details": details,
+        }
+        try:
+            self.cleansing_queue.put(event)
+        except Exception as e:
+            logging.debug(f"Unable to queue cleansing event: {e}")
+
+    def flush_cleansing_queue(self):
+        if not hasattr(self, "cleansing_tree") or not self.cleansing_tree.winfo_exists():
+            return
+        try:
+            while not self.cleansing_queue.empty():
+                event = self.cleansing_queue.get_nowait()
+                self.cleansing_events.append(event)
+                self.cleansing_tree.insert("", "end", values=(event["timestamp"], event["stage"], event["row"], event["field"], event["original"], event["cleaned"], event["details"]))
+        except queue.Empty:
+            pass
+        finally:
+            self.after(400, self.flush_cleansing_queue)
     def populate_special_mapping_tab(self): # as original
         for item in self.special_tree.get_children(): self.special_tree.delete(item)
         for char, replacement in sorted(self.special_char_map.items()): self.special_tree.insert("", "end", values=(char, replacement))
@@ -851,13 +1035,14 @@ class Application(tk.Tk):
         if not self.mapping:
              if not messagebox.askyesno("No Mapping", "CSV Mapping is empty. Proceed with default mapping?"): return
         self._stop_requested = False; self.stop_button.config(state=tk.NORMAL)
+        self.clear_cleansing_log()
         self._processing_thread = threading.Thread(target=self._do_generation, daemon=True); self._processing_thread.start()
     def _do_generation(self):
         logging.info("Generation thread started."); start_time = datetime.now(); updated_map = None; success = False
         try:
             try: batch_val = int(self.batch_size.get())
             except ValueError: batch_val = 7000; logging.warning("Invalid batch size, using default 7000.")
-            updated_map = run_processing(csv_file=self.csv_file.get(), xml_base=self.xml_base.get(), default_location=self.default_location.get(), category=self.category.get(), username=self.username.get(), mapping=self.mapping, action=self.action.get(), node_type=self.node_type.get(), batch_size=batch_val, use_csv_createdby=self.use_csv_createdby.get(), report_file=self.report_file.get(), use_report_for_file=self.use_report_for_file.get(), csv_delimiter=self.csv_delimiter.get(), csv_quotechar=self.csv_quotechar.get(), cdata_fields=self.cdata_fields.get(), stop_flag_func=self.stop_flag_func, force_reprocess=self.force_reprocess_var.get())
+            updated_map = run_processing(csv_file=self.csv_file.get(), xml_base=self.xml_base.get(), default_location=self.default_location.get(), category=self.category.get(), username=self.username.get(), mapping=self.mapping, action=self.action.get(), node_type=self.node_type.get(), batch_size=batch_val, use_csv_createdby=self.use_csv_createdby.get(), report_file=self.report_file.get(), use_report_for_file=self.use_report_for_file.get(), csv_delimiter=self.csv_delimiter.get(), csv_quotechar=self.csv_quotechar.get(), cdata_fields=self.cdata_fields.get(), stop_flag_func=self.stop_flag_func, force_reprocess=self.force_reprocess_var.get(), cleansing_callback=self.record_cleansing_action, cleansing_options=self.get_cleansing_options())
             success = True
         except Exception as e: logging.exception("Critical error during generation process."); self.after(0, lambda: messagebox.showerror("Generation Error", f"An critical error occurred:\n{e}"))
         finally: end_time = datetime.now(); logging.info(f"Generation thread finished. Duration: {end_time - start_time}"); (setattr(self, 'mapping', updated_map) if updated_map is not None else None); self.after(0, self._generation_complete, success)
@@ -908,7 +1093,7 @@ class Application(tk.Tk):
             db_object = db_handler.get_object_by_identifier(failed_item['identifier'], self.current_db_path)
             if not db_object: match_errors +=1; entries_for_treeview.append({'unique_id': '(No DB Match)', 'identifier': failed_item['identifier'], 'error_message': failed_item['xml_error'], 'action_state': 'Skip'}); continue
             if not db_object.get('csv_data'): regen_errors +=1; entries_for_treeview.append({**db_object, 'error_message': 'Original CSV data missing.', 'action_state': 'Skip'}); continue
-            node_elem, error_msg = process_row(db_object['csv_row_index'], db_object['csv_data'], self.mapping, self.default_location.get(), self.username.get(), self.action.get(), self.node_type.get(), self.category.get(), self.use_csv_createdby.get(), None, [], self.special_char_map)
+            node_elem, error_msg = process_row(db_object['csv_row_index'], db_object['csv_data'], self.mapping, self.default_location.get(), self.username.get(), self.action.get(), self.node_type.get(), self.category.get(), self.use_csv_createdby.get(), None, [], self.special_char_map, self.get_cleansing_options(), cleansing_callback=self.record_cleansing_action)
             tree_entry = {**db_object, 'identifier': failed_item['identifier'], 'error_message': failed_item['xml_error'], 'generated_xml': ET.tostring(node_elem, encoding='unicode') if node_elem else None, 'action_state': 'Re-import' if node_elem else 'Skip'}
             if not node_elem: regen_errors +=1; tree_entry['error_message'] = f"Regen Failed: {error_msg}"
             entries_for_treeview.append(tree_entry)

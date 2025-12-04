@@ -201,12 +201,8 @@ def convert_xml_to_csv(xml_string: str, selected_fields_by_node: dict | None = N
          if not any(selected_fields_by_node.get(tag) for tag in selected_fields_by_node if selected_fields_by_node): # check if any selection was made
             return "" # If truly nothing was selected or available
 
-    # Ensure 'element_tag' is always first if present
-    sorted_headers_list = sorted(list(all_headers - {'element_tag'}))
-    if 'element_tag' in all_headers:
-        final_headers = ['element_tag'] + sorted_headers_list
-    else:
-        final_headers = sorted_headers_list
+    # Sort headers alphabetically for deterministic ordering
+    final_headers = sorted(all_headers)
 
     if not final_headers and not processed_rows_data: # If after all filtering, there's nothing
         return ""
@@ -226,15 +222,9 @@ def convert_xml_to_csv(xml_string: str, selected_fields_by_node: dict | None = N
         # Ensure row_data is not empty and contains at least one of the final_headers
         # This check might be redundant if processed_rows_data filtering is robust
         if any(h in row_data for h in final_headers) or (not final_headers and not row_data): # allow empty row if no headers
-             row_to_write = [row_data.get(header, "") for header in final_headers]
-             writer.writerow(row_to_write)
+            row_to_write = [row_data.get(header, "") for header in final_headers]
+            writer.writerow(row_to_write)
         elif not row_data and 'element_tag' in final_headers and len(final_headers) == 1: # Special case for only element_tag column
-             writer.writerow([""]) # Write an empty field for element_tag
-    output = StringIO()
-    writer = csv.writer(output, quoting=csv.QUOTE_ALL, lineterminator='\n')
-    writer.writerow(sorted_headers)
-    for row_data in processed_rows_data:
-        row_to_write = [row_data.get(header, "") for header in sorted_headers]
-        writer.writerow(row_to_write)
+            writer.writerow([""]) # Write an empty field for element_tag
 
     return output.getvalue()
