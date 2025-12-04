@@ -266,32 +266,11 @@ Even if you don't contribute code, feedback and bug reports are also valuable.
 
 ## License
 
-This project is currently not under a specific license. It is recommended to add an open-source license if you intend for others to use, modify, or distribute the code.
+# OI-Generator
 
-If you choose to use the MIT License, a common and permissive open-source license, you can add the following text. Remember to replace `[Year]` and `[Full Name]` with the appropriate information.
+Object Import and Export tool for use with OpenText Content Server
 
-```
-MIT License
+## License
 
-Copyright (c) [Year] [Full Name]
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
-
-You should also create a `LICENSE` file in the root of your project containing the full license text.
